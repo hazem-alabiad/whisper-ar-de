@@ -210,14 +210,14 @@ def translate_segments(segments: list, output_dir: Path | None = None) -> list:
                     with open(progress_file, "w") as f:
                         json.dump(list(translated_indices), f)
             
-            def save_live_backup(batch_start: int, batch_end: int):
+            def save_live_backup(batch_end: int):
                 """Save translated segments to SRT file immediately after translation."""
                 if output_dir:
-                    # Save partial German SRT
-                    temp_srt = output_dir / f"{output_dir.name}_de_temp.srt"
+                    # Save partial German SRT with all translated segments so far
+                    temp_srt = output_dir / "translation_temp.srt"
                     with open(temp_srt, "w", encoding="utf-8") as f:
                         for i, seg in enumerate(segments[:batch_end], start=1):
-                            if i <= batch_end and seg["text"].strip():
+                            if seg["text"].strip():
                                 f.write(f"{i}\n")
                                 f.write(f"{format_time(seg['start'])} --> {format_time(seg['end'])}\n")
                                 f.write(f"{seg['text'].strip()}\n\n")
@@ -266,7 +266,7 @@ def translate_segments(segments: list, output_dir: Path | None = None) -> list:
                 for i in range(batch_start, batch_end):
                     translated_indices.add(i)
                 save_progress()
-                save_live_backup(batch_start, batch_end)  # Save immediately
+                save_live_backup(batch_end)  # Save immediately
                 
                 return batch_end
             

@@ -172,6 +172,50 @@ def transcribe_arabic(audio_path: Path, model_name: str) -> list:
     return cast(list, result["segments"])
 
 
+def verify_translations_with_google(segments: list) -> None:
+    """Verify German translations using Google Translate (free API).
+    
+    Re-translates original Arabic text to German and compares with existing translations.
+    """
+    print(f"\n  Verifying translations with Google Translate (free API)...")
+    try:
+        translator = GoogleTranslator(source="ar", target="de")
+        total = len(segments)
+        verified_count = 0
+        mismatch_count = 0
+        
+        for idx, seg in enumerate(segments, 1):
+            # Get original Arabic text (stored before translation)
+            original_text = seg.get("original_ar", "")
+            if not original_text.strip():
+                continue
+            
+            try:
+                # Get Google's translation of original Arabic
+                google_translation = translator.translate(original_text)
+                google_text = google_translation if isinstance(google_translation, str) else str(google_translation)
+                
+                # Compare with current German translation
+                current_text = seg["text"].strip()
+                if google_text.strip() != current_text:
+                    mismatch_count += 1
+                    print(f"  [VERIFY] Segment {idx}: Google suggests different translation")
+                    print(f"           Current: {current_text[:60]}...")
+                    print(f"           Google:  {google_text[:60]}...")
+                else:
+                    verified_count += 1
+                    print(f"  [VERIFY] Segment {idx}: ✓ Translation verified")
+            except Exception as e:
+                print(f"  [VERIFY] Segment {idx}: Error - {e}")
+            
+            if idx % 10 == 0 or idx == total:
+                print(f"  Verification progress: {idx}/{total} ({idx*100//total}%)")
+        
+        print(f"  Google verification completed: {verified_count} verified, {mismatch_count} mismatches")
+    except Exception as e:
+        print(f"  [WARNING] Google verification failed: {e}")
+
+
 def translate_segments(segments: list, output_dir: Path | None = None) -> list:
     """Translate each segment's text from Arabic to German.
 
@@ -183,6 +227,11 @@ def translate_segments(segments: list, output_dir: Path | None = None) -> list:
     2. Google Translate (free fallback)
     """
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+
+    # Store original Arabic text before translation for verification
+    for seg in segments:
+        if "original_ar" not in seg:
+            seg["original_ar"] = seg["text"]
 
     # Priority 1: OpenAI GPT-4 (best quality for Arabic→German) - PARALLEL BULK MODE
     if openai_key:
@@ -484,6 +533,9 @@ def main():
         segments = translate_segments(segments, output_dir)
         write_srt(segments, german_srt)
         print(f"       German SRT: {german_srt.name}")
+        
+        # Verify translations with Google Translate (free API)
+        verify_translations_with_google(segments)
 
     # Step 4: German audio (skip if exists)
     if german_audio.exists():

@@ -181,12 +181,21 @@ def translate_segments(segments: list) -> list:
     if use_deepl:
         print(f"  Translating {len(segments)} segments Arabic → German (DeepL) ...")
         translator = deepl.Translator(auth_key)
-        for seg in segments:
-            text = seg["text"].strip()
-            if text:
-                result = translator.translate_text(text, source_lang="AR", target_lang="DE")
-                translation = result[0] if isinstance(result, list) else result
-                seg["text"] = translation.text
+        try:
+            for seg in segments:
+                text = seg["text"].strip()
+                if text:
+                    result = translator.translate_text(text, source_lang="AR", target_lang="DE")
+                    translation = result[0] if isinstance(result, list) else result
+                    seg["text"] = translation.text
+        except deepl.exceptions.AuthorizationException:
+            print("  DeepL auth failed (invalid key), falling back to Google Translate.")
+            translator = GoogleTranslator(source="ar", target="de")
+            for seg in segments:
+                text = seg["text"].strip()
+                if text:
+                    result = translator.translate(text)
+                    seg["text"] = result if isinstance(result, str) else str(result)
     else:
         print(f"  Translating {len(segments)} segments Arabic → German (Google Translate — free, no key needed) ...")
         print(f"  Tip: Set DEEPL_AUTH_KEY environment variable for better quality translations.")

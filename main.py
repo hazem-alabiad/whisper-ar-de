@@ -186,11 +186,10 @@ def translate_segments(segments: list) -> list:
 
     if use_deepl:
         print(f"  Translating {len(segments)} segments Arabic → German (DeepL) ...")
-        translator = None
-        
         # Detect if this is a Free API key (ends with :fx)
         is_free_api = auth_key.endswith(":fx")
-        # Free API keys MUST use api-free.deepl.com endpoint
+        print(f"  DeepL key loaded: {auth_key[:10]}...{auth_key[-6:]} (type: {'Free' if is_free_api else 'Pro'})")
+        translator = None
         if is_free_api:
             server_urls = ["https://api-free.deepl.com"]
         else:

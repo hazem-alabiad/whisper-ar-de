@@ -165,6 +165,7 @@ def transcribe_arabic(audio_path: Path, model_name: str) -> list:
     result = mlx_whisper.transcribe(
         str(audio_path),
         path_or_hf_repo=f"mlx-community/whisper-{model_name}",
+     
         language="ar",
         verbose=False,
     )
@@ -183,7 +184,6 @@ def translate_segments(segments: list) -> list:
     if use_deepl:
         print(f"  Translating {len(segments)} segments Arabic → German (DeepL) ...")
         try:
-            # Try with explicit API version
             translator = deepl.Translator(auth_key)
             test_result = translator.translate_text("test", source_lang="AR", target_lang="DE")
             print(f"  DeepL API test successful")
@@ -195,10 +195,6 @@ def translate_segments(segments: list) -> list:
                     seg["text"] = translation.text
         except deepl.exceptions.AuthorizationException as e:
             print(f"  DeepL auth error: {e}")
-            print("  Possible causes:")
-            print("    - Free API keys may be blocked/restricted")
-            print("    - Account may need activation")
-            print("    - Check DeepL dashboard for key status")
             print("  Falling back to Google Translate.")
             translator = GoogleTranslator(source="ar", target="de")
             for seg in segments:

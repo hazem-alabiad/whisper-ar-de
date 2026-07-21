@@ -174,33 +174,59 @@ def translate_segments(segments: list) -> list:
     """Translate each segment's text from Arabic to German.
 
     Uses best available translation backend in priority order:
-    1. OpenAI GPT-4 (best quality, requires OPENAI_API_KEY)
+    1. OpenAI GPT-4 (best quality, requires OPENAI_API_KEY) - bulk translation
     2. Google Translate (free fallback)
     """
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
 
-    # Priority 1: OpenAI GPT-4 (best quality for Arabic→German)
+    # Priority 1: OpenAI GPT-4 (best quality for Arabic→German) - BULK MODE
     if openai_key:
-        print(f"  Translating {len(segments)} segments Arabic → German (OpenAI GPT-4) ...")
+        print(f"  Translating {len(segments)} segments Arabic → German (OpenAI GPT-4 - bulk mode) ...")
         try:
             client = OpenAI(api_key=openai_key)
             total = len(segments)
-            for idx, seg in enumerate(segments, 1):
-                text = seg["text"].strip()
-                if text:
-                    response = client.chat.completions.create(
-                        model="gpt-4o",
-                        messages=[
-                            {"role": "system", "content": "You are a professional Arabic to German translator. Translate the following Arabic text to natural, fluent German. Preserve the meaning and context."},
-                            {"role": "user", "content": text}
-                        ],
-                        temperature=0.3,
-                    )
-                    translated = response.choices[0].message.content
-                    seg["text"] = translated.strip() if translated else ""
-                if idx % 5 == 0 or idx == total:
-                    print(f"  Progress: {idx}/{total} ({idx*100//total}%)")
-            print(f"  OpenAI translation completed successfully")
+            batch_size = 10  # Process 10 segments per API call
+            
+            for batch_start in range(0, total, batch_size):
+                batch_end = min(batch_start + batch_size, total)
+                batch = segments[batch_start:batch_end]
+                
+                # Combine segments into single translation request
+                combined_text = "\n\n".join([f"[{i+1}] {seg['text'].strip()}" 
+                                            for i, seg in enumerate(batch) if seg['text'].strip()])
+                
+                if not combined_text:
+                    continue
+                
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": f"""You are a professional Arabic to German translator. 
+                        Translate each numbered segment from Arabic to natural, fluent German.
+                        Keep the same numbering format [N] at the start of each segment.
+                        Preserve the meaning and context of each segment.
+                        There are {len(batch)} segments to translate."""},
+                        {"role": "user", "content": combined_text}
+                    ],
+                    temperature=0.3,
+                )
+                
+                # Parse the bulk response
+                translated_text = response.choices[0].message.content
+                if translated_text:
+                    translated_lines = translated_text.strip().split("\n\n")
+                    for i, line in enumerate(translated_lines):
+                        if i < len(batch) and line.strip():
+                            # Extract translated text, removing the [N] prefix
+                            cleaned = line.strip()
+                            if cleaned.startswith("["):
+                                cleaned = cleaned.split("]", 1)[1].strip()
+                            batch[i]["text"] = cleaned
+                
+                if batch_end % 20 == 0 or batch_end == total:
+                    print(f"  Progress: {batch_end}/{total} ({batch_end*100//total}%)")
+            
+            print(f"  OpenAI bulk translation completed successfully")
             return segments
         except Exception as e:
             print(f"  OpenAI error ({type(e).__name__}): {e}")

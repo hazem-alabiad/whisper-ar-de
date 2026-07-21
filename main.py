@@ -18,7 +18,7 @@ Example:
 """
 
 import argparse
-
+import json
 import os
 import re
 import subprocess
@@ -172,9 +172,11 @@ def transcribe_arabic(audio_path: Path, model_name: str) -> list:
     return cast(list, result["segments"])
 
 
-def translate_segments(segments: list) -> list:
+def translate_segments(segments: list, output_dir: Path | None = None) -> list:
     """Translate each segment's text from Arabic to German.
 
+    Supports resume capability - if interrupted, re-run to continue from last checkpoint.
+    
     Uses best available translation backend in priority order:
     1. OpenAI GPT-4 (best quality, requires OPENAI_API_KEY) - parallel bulk translation
     2. Google Translate (free fallback)
@@ -190,13 +192,38 @@ def translate_segments(segments: list) -> list:
             batch_size = 10
             max_workers = 5  # Run 5 batches in parallel
             
+            # Resume support: mark segments already translated
+            translated_indices = set()
+            if output_dir:
+                progress_file = output_dir / "translation_progress.json"
+                if progress_file.exists():
+                    with open(progress_file) as f:
+                        translated_indices = set(json.load(f))
+                    if translated_indices:
+                        print(f"  Resuming: {len(translated_indices)} segments already translated")
+            
+            def save_progress():
+                """Save translated indices to progress file."""
+                if output_dir:
+                    progress_file = output_dir / "translation_progress.json"
+                    with open(progress_file, "w") as f:
+                        json.dump(list(translated_indices), f)
+            
             def translate_batch(batch_start: int, batch_end: int) -> int:
                 """Translate a batch of segments."""
+                # Skip already translated segments
+                if any(i in translated_indices for i in range(batch_start, batch_end)):
+                    return batch_end
+                
                 batch = segments[batch_start:batch_end]
                 combined_text = "\n\n".join([f"[{i+1}] {seg['text'].strip()}" 
                                             for i, seg in enumerate(batch) if seg['text'].strip()])
                 
                 if not combined_text:
+                    # Mark as translated even if empty
+                    for i in range(batch_start, batch_end):
+                        translated_indices.add(i)
+                    save_progress()
                     return batch_end
                 
                 response = client.chat.completions.create(
@@ -222,6 +249,11 @@ def translate_segments(segments: list) -> list:
                                 cleaned = cleaned.split("]", 1)[1].strip()
                             batch[i]["text"] = cleaned
                 
+                # Mark as translated
+                for i in range(batch_start, batch_end):
+                    translated_indices.add(i)
+                save_progress()
+                
                 return batch_end
             
             # Process batches in parallel
@@ -229,7 +261,9 @@ def translate_segments(segments: list) -> list:
                 futures = []
                 for batch_start in range(0, total, batch_size):
                     batch_end = min(batch_start + batch_size, total)
-                    futures.append(executor.submit(translate_batch, batch_start, batch_end))
+                    # Only submit if not already translated
+                    if not any(i in translated_indices for i in range(batch_start, batch_end)):
+                        futures.append(executor.submit(translate_batch, batch_start, batch_end))
                 
                 # Wait for completion and show progress
                 completed = 0
@@ -392,7 +426,7 @@ def main():
         print(f"       {len(segments)} segments loaded")
     else:
         print(f"\n[3/5] Translating to German...")
-        segments = translate_segments(segments)
+        segments = translate_segments(segments, output_dir)
         write_srt(segments, german_srt)
         print(f"       German SRT: {german_srt.name}")
 

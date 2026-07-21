@@ -18,9 +18,11 @@ Example:
 """
 
 import argparse
+
 import os
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import cast
 
@@ -174,29 +176,28 @@ def translate_segments(segments: list) -> list:
     """Translate each segment's text from Arabic to German.
 
     Uses best available translation backend in priority order:
-    1. OpenAI GPT-4 (best quality, requires OPENAI_API_KEY) - bulk translation
+    1. OpenAI GPT-4 (best quality, requires OPENAI_API_KEY) - parallel bulk translation
     2. Google Translate (free fallback)
     """
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
 
-    # Priority 1: OpenAI GPT-4 (best quality for Arabic→German) - BULK MODE
+    # Priority 1: OpenAI GPT-4 (best quality for Arabic→German) - PARALLEL BULK MODE
     if openai_key:
-        print(f"  Translating {len(segments)} segments Arabic → German (OpenAI GPT-4 - bulk mode) ...")
+        print(f"  Translating {len(segments)} segments Arabic → German (OpenAI GPT-4 - parallel bulk mode) ...")
         try:
             client = OpenAI(api_key=openai_key)
             total = len(segments)
-            batch_size = 10  # Process 10 segments per API call
+            batch_size = 10
+            max_workers = 5  # Run 5 batches in parallel
             
-            for batch_start in range(0, total, batch_size):
-                batch_end = min(batch_start + batch_size, total)
+            def translate_batch(batch_start: int, batch_end: int) -> int:
+                """Translate a batch of segments."""
                 batch = segments[batch_start:batch_end]
-                
-                # Combine segments into single translation request
                 combined_text = "\n\n".join([f"[{i+1}] {seg['text'].strip()}" 
                                             for i, seg in enumerate(batch) if seg['text'].strip()])
                 
                 if not combined_text:
-                    continue
+                    return batch_end
                 
                 response = client.chat.completions.create(
                     model="gpt-4o",
@@ -211,22 +212,34 @@ def translate_segments(segments: list) -> list:
                     temperature=0.3,
                 )
                 
-                # Parse the bulk response
                 translated_text = response.choices[0].message.content
                 if translated_text:
                     translated_lines = translated_text.strip().split("\n\n")
                     for i, line in enumerate(translated_lines):
                         if i < len(batch) and line.strip():
-                            # Extract translated text, removing the [N] prefix
                             cleaned = line.strip()
                             if cleaned.startswith("["):
                                 cleaned = cleaned.split("]", 1)[1].strip()
                             batch[i]["text"] = cleaned
                 
-                if batch_end % 20 == 0 or batch_end == total:
-                    print(f"  Progress: {batch_end}/{total} ({batch_end*100//total}%)")
+                return batch_end
             
-            print(f"  OpenAI bulk translation completed successfully")
+            # Process batches in parallel
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
+                for batch_start in range(0, total, batch_size):
+                    batch_end = min(batch_start + batch_size, total)
+                    futures.append(executor.submit(translate_batch, batch_start, batch_end))
+                
+                # Wait for completion and show progress
+                completed = 0
+                for future in as_completed(futures):
+                    batch_end = future.result()
+                    completed = max(completed, batch_end)
+                    if completed % 20 == 0 or completed == total:
+                        print(f"  Progress: {completed}/{total} ({completed*100//total}%)")
+            
+            print(f"  OpenAI parallel bulk translation completed successfully")
             return segments
         except Exception as e:
             print(f"  OpenAI error ({type(e).__name__}): {e}")

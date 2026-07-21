@@ -6,6 +6,7 @@ Downloads a YouTube video, transcribes Arabic audio to SRT,
 translates to German SRT, generates German AI speech,
 and compresses the video to ~50 MB.
 
+Uses MLX-Whisper for fast transcription on Apple Silicon GPU.
 Resume support: re-run the same command and it detects existing
 output files, skipping completed steps automatically.
 
@@ -14,7 +15,6 @@ Usage:
 
 Example:
     python main.py https://youtu.be/MgxTrPOkhDU
-    python main.py https://youtube.com/watch?v=abc123 --model large --target-size 100
 """
 
 import argparse
@@ -24,13 +24,12 @@ import subprocess
 from pathlib import Path
 
 import deepl
-import torch
-import whisper
+import mlx_whisper
 from deep_translator import GoogleTranslator
 from gtts import gTTS
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     parser = argparse.ArgumentParser(
         description="YouTube Arabic → German: SRT subtitles + AI audio + compressed video."
     )
@@ -39,7 +38,7 @@ def parse_args() -> argparse.Namespace:
         "--model",
         type=str,
         default="medium",
-        choices=["tiny", "base", "small", "medium", "large"],
+        choices=["tiny", "base", "small", "medium", "large-v2", "large-v3"],
         help="Whisper model size (default: medium)",
     )
     parser.add_argument(
@@ -58,7 +57,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def sanitize_filename(name: str) -> str:
-    """Remove or replace characters unsafe for filenames."""
     name = re.sub(r'[<>:"/\\|?*]', "_", name)
     name = re.sub(r'\s+', "_", name.strip())
     name = name.strip("._")
@@ -66,7 +64,6 @@ def sanitize_filename(name: str) -> str:
 
 
 def get_youtube_title(url: str) -> str:
-    """Fetch the YouTube video title using yt-dlp."""
     result = subprocess.run(
         ["yt-dlp", "--print", "title", url],
         capture_output=True, text=True, check=True,
@@ -75,7 +72,6 @@ def get_youtube_title(url: str) -> str:
 
 
 def prompt_output_name(url: str) -> str:
-    """Ask user for output name with YouTube title as default."""
     try:
         print("  Fetching video title...")
         default_name = get_youtube_title(url)
@@ -105,7 +101,6 @@ def write_srt(segments: list, srt_path: Path) -> None:
 
 
 def read_srt_arabic(srt_path: Path) -> list:
-    """Read Arabic SRT file back into segment dicts for re-translation."""
     segments = []
     with open(srt_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
@@ -132,7 +127,6 @@ def read_srt_arabic(srt_path: Path) -> list:
 
 
 def download_youtube(url: str, output_dir: Path) -> dict:
-    """Download video + audio, returns dict with paths."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     video_template = output_dir / "%(id)s_video.%(ext)s"
@@ -162,34 +156,14 @@ def download_youtube(url: str, output_dir: Path) -> dict:
     }
 
 
-def get_device() -> str:
-    if torch.backends.mps.is_available():
-        return "mps"
-    elif torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
-
-
-def get_compute_dtype():
-    """Use float16 on GPU for ~2x faster transcription, float32 on CPU."""
-    if torch.backends.mps.is_available() or torch.cuda.is_available():
-        return torch.float16
-    return torch.float32
-
-
 def transcribe_arabic(audio_path: Path, model_name: str) -> list:
-    """Transcribe Arabic audio faster using fp16 on GPU, returns list of segment dicts."""
-    device = get_device()
-    dtype = get_compute_dtype()
-    print(f"  Loading Whisper model ({model_name}) on {device.upper()} (dtype: {dtype})...")
-    model = whisper.load_model(model_name, device=device)
-    print(f"  Transcribing Arabic audio on {device.upper()}...")
-    result = model.transcribe(
+    """Transcribe Arabic audio using MLX-Whisper on Apple Silicon GPU."""
+    print(f"  Transcribing Arabic audio with MLX-Whisper ({model_name})...")
+    result = mlx_whisper.transcribe(
         str(audio_path),
+        path_or_hf_repo=f"mlx-community/whisper-{model_name}",
         language="ar",
-        task="transcribe",
         verbose=False,
-        fp16=(dtype == torch.float16),
     )
     return result["segments"]
 
@@ -292,43 +266,40 @@ def main():
     print(f"  URL: {args.url}")
     print(f"{'='*60}\n")
 
-    # ── Step 0: Name & Detect existing output ────────────────────
+    # Step 0: Name & Detect existing output
     base_name = None
-    # Check if we already have output files from a previous run
     existing_ar_srt = None
     for f in output_dir.glob("*_ar.srt"):
         existing_ar_srt = f
         break
 
     if existing_ar_srt:
-        base_name = existing_ar_srt.stem[:-3]  # remove _ar suffix
-        print(f"  📁 Found existing Arabic SRT: {existing_ar_srt.name}")
+        base_name = existing_ar_srt.stem[:-3]
+        print(f"  Found existing Arabic SRT: {existing_ar_srt.name}")
         print(f"     Resume with base name: {base_name}")
         answer = input("  Re-use this base name? [Y/n]: ").strip().lower()
         if answer in ("", "y", "yes"):
             print(f"  Resuming with existing base name: {base_name}")
-        else:
-            base_name = None
 
     if base_name is None:
         print("[0/5] Naming output files...")
         base_name = prompt_output_name(args.url)
         print(f"       Base name: {base_name}")
 
-    # Define output paths early so we can check them for resume
+    # Define output paths early
     arabic_srt = output_dir / f"{base_name}_ar.srt"
     german_srt = output_dir / f"{base_name}_de.srt"
     german_audio = output_dir / f"{base_name}_de.mp3"
     compressed_video = output_dir / f"{base_name}_compressed.mp4"
 
-    # ── Step 1: Download (skip if video+audio exist) ─────────────
+    # Step 1: Download (skip if video+audio exist)
     mp4_files = sorted(output_dir.glob("*_video.mp4"))
     mp3_files = sorted(output_dir.glob("*.mp3"))
     video_path = mp4_files[0] if mp4_files else None
     audio_path = mp3_files[0] if mp3_files else None
 
     if video_path and audio_path:
-        print("\n[1/5] ✅ Video & audio already downloaded")
+        print("\n[1/5] Video & audio already downloaded")
         print(f"       Video: {video_path.name}")
         print(f"       Audio: {audio_path.name}")
     else:
@@ -339,9 +310,9 @@ def main():
         print(f"       Video: {video_path.name}")
         print(f"       Audio: {audio_path.name}")
 
-    # ── Step 2: Transcribe (skip if Arabic SRT exists) ───────────
+    # Step 2: Transcribe (skip if Arabic SRT exists)
     if arabic_srt.exists():
-        print(f"\n[2/5] ✅ Already transcribed — loading from {arabic_srt.name}")
+        print(f"\n[2/5] Already transcribed — loading from {arabic_srt.name}")
         segments = read_srt_arabic(arabic_srt)
         print(f"       {len(segments)} segments loaded")
     else:
@@ -350,9 +321,9 @@ def main():
         write_srt(segments, arabic_srt)
         print(f"       Arabic SRT: {arabic_srt.name} ({len(segments)} segments)")
 
-    # ── Step 3: Translate (skip if German SRT exists) ────────────
+    # Step 3: Translate (skip if German SRT exists)
     if german_srt.exists():
-        print(f"\n[3/5] ✅ Already translated — loading from {german_srt.name}")
+        print(f"\n[3/5] Already translated — loading from {german_srt.name}")
         segments = read_srt_arabic(german_srt)
         print(f"       {len(segments)} segments loaded")
     else:
@@ -361,25 +332,23 @@ def main():
         write_srt(segments, german_srt)
         print(f"       German SRT: {german_srt.name}")
 
-    # ── Step 4: German audio (skip if exists) ────────────────────
+    # Step 4: German audio (skip if exists)
     if german_audio.exists():
-        print(f"\n[4/5] ✅ German audio already generated: {german_audio.name}")
+        print(f"\n[4/5] German audio already generated: {german_audio.name}")
     else:
         print(f"\n[4/5] Generating German audio via AI...")
         generate_german_audio(segments, german_audio)
         print(f"       German audio: {german_audio.name}")
 
-    # ── Step 5: Compress video (skip if exists) ──────────────────
+    # Step 5: Compress video (skip if exists)
     if compressed_video.exists():
-        print(f"\n[5/5] ✅ Compressed video already exists: {compressed_video.name}")
+        print(f"\n[5/5] Compressed video already exists: {compressed_video.name}")
     else:
         print(f"\n[5/5] Compressing video (target: {args.target_size} MB)...")
         compress_video(video_path, compressed_video, args.target_size)
 
-    # Note: all downloaded and intermediate files are preserved in output/
-    # in case you need to re-run or resume later.
     print(f"\n{'='*60}")
-    print(f"  ✅ All done! Files in '{output_dir}/':")
+    print(f"  All done! Files in '{output_dir}/':")
     print(f"     - {arabic_srt.name}  (Arabic subtitles)")
     print(f"     - {german_srt.name}   (German subtitles)")
     print(f"     - {german_audio.name}  (German AI speech)")

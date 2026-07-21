@@ -212,15 +212,24 @@ def translate_segments(segments: list, output_dir: Path | None = None) -> list:
             
             def save_live_backup(batch_end: int):
                 """Save translated segments to SRT file immediately after translation."""
-                if output_dir:
-                    # Save partial German SRT with all translated segments so far
-                    temp_srt = output_dir / "translation_temp.srt"
+                if not output_dir:
+                    return
+                
+                # Save partial German SRT with all translated segments so far
+                temp_srt = output_dir / "translation_temp.srt"
+                try:
+                    print(f"  [DEBUG] Saving live backup to: {temp_srt.absolute()}")
                     with open(temp_srt, "w", encoding="utf-8") as f:
+                        translated_count = 0
                         for i, seg in enumerate(segments[:batch_end], start=1):
                             if seg["text"].strip():
                                 f.write(f"{i}\n")
                                 f.write(f"{format_time(seg['start'])} --> {format_time(seg['end'])}\n")
                                 f.write(f"{seg['text'].strip()}\n\n")
+                                translated_count += 1
+                    print(f"  [DEBUG] Live backup saved: {translated_count} segments")
+                except Exception as e:
+                    print(f"  [WARNING] Could not save live backup: {e}")
             
             def translate_batch(batch_start: int, batch_end: int) -> int:
                 """Translate a batch of segments."""
@@ -298,11 +307,43 @@ def translate_segments(segments: list, output_dir: Path | None = None) -> list:
     print(f"  Tip: Set OPENAI_API_KEY for better quality translations.")
     translator = GoogleTranslator(source="ar", target="de")
     total = len(segments)
+    
+    # Resume support for Google Translate
+    translated_indices = set()
+    if output_dir:
+        progress_file = output_dir / "translation_progress.json"
+        if progress_file.exists():
+            with open(progress_file) as f:
+                translated_indices = set(json.load(f))
+            if translated_indices:
+                print(f"  Resuming: {len(translated_indices)} segments already translated")
+    
     for idx, seg in enumerate(segments, 1):
+        # Skip already translated
+        if idx - 1 in translated_indices:
+            continue
+            
         text = seg["text"].strip()
         if text:
             result = translator.translate(text)
             seg["text"] = result if isinstance(result, str) else str(result)
+        
+        # Mark as translated and save
+        translated_indices.add(idx - 1)
+        if output_dir:
+            progress_file = output_dir / "translation_progress.json"
+            with open(progress_file, "w") as f:
+                json.dump(list(translated_indices), f)
+            
+            # Save live backup
+            temp_srt = output_dir / "translation_temp.srt"
+            with open(temp_srt, "w", encoding="utf-8") as f:
+                for i, s in enumerate(segments[:idx], start=1):
+                    if s["text"].strip():
+                        f.write(f"{i}\n")
+                        f.write(f"{format_time(s['start'])} --> {format_time(s['end'])}\n")
+                        f.write(f"{s['text'].strip()}\n\n")
+        
         if idx % 5 == 0 or idx == total:
             print(f"  Progress: {idx}/{total} ({idx*100//total}%)")
     return segments

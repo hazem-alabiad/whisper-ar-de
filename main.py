@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import deepl
 import mlx_whisper
@@ -165,7 +166,7 @@ def transcribe_arabic(audio_path: Path, model_name: str) -> list:
         language="ar",
         verbose=False,
     )
-    return result["segments"]
+    return cast(list, result["segments"])
 
 
 def translate_segments(segments: list) -> list:
@@ -184,7 +185,8 @@ def translate_segments(segments: list) -> list:
             text = seg["text"].strip()
             if text:
                 result = translator.translate_text(text, source_lang="AR", target_lang="DE")
-                seg["text"] = result.text
+                translation = result[0] if isinstance(result, list) else result
+                seg["text"] = translation.text
     else:
         print(f"  Translating {len(segments)} segments Arabic → German (Google Translate — free, no key needed) ...")
         print(f"  Tip: Set DEEPL_AUTH_KEY environment variable for better quality translations.")

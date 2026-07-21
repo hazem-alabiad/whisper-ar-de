@@ -24,6 +24,8 @@ import subprocess
 from pathlib import Path
 from typing import cast
 
+from dotenv import load_dotenv
+
 import deepl
 import mlx_whisper
 from deep_translator import GoogleTranslator
@@ -268,6 +270,7 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int) -> None:
 
 
 def main():
+    load_dotenv()
     args = parse_args()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

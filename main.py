@@ -27,7 +27,6 @@ from typing import cast
 from dotenv import load_dotenv
 from openai import OpenAI
 
-import deepl
 import mlx_whisper
 from deep_translator import GoogleTranslator
 from gtts import gTTS
@@ -176,11 +175,9 @@ def translate_segments(segments: list) -> list:
 
     Uses best available translation backend in priority order:
     1. OpenAI GPT-4 (best quality, requires OPENAI_API_KEY)
-    2. DeepL (high quality, requires DEEPL_AUTH_KEY)
-    3. Google Translate (free fallback)
+    2. Google Translate (free fallback)
     """
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
-    deepl_key = os.getenv("DEEPL_AUTH_KEY", "").strip()
 
     # Priority 1: OpenAI GPT-4 (best quality for Arabic→German)
     if openai_key:
@@ -207,61 +204,20 @@ def translate_segments(segments: list) -> list:
             return segments
         except Exception as e:
             print(f"  OpenAI error ({type(e).__name__}): {e}")
-            print("  Falling back to DeepL...")
+            print("  Falling back to Google Translate...")
 
-    # Priority 2: DeepL (high quality)
-    if deepl_key:
-        print(f"  Translating {len(segments)} segments Arabic → German (DeepL) ...")
-        # Detect if this is a Free API key (ends with :fx)
-        is_free_api = deepl_key.endswith(":fx")
-        print(f"  DeepL key loaded: {deepl_key[:10]}...{deepl_key[-6:]} (type: {'Free' if is_free_api else 'Pro'})")
-        translator = None
-        if is_free_api:
-            server_urls = ["https://api-free.deepl.com"]
-        else:
-            server_urls = [None, "https://api-free.deepl.com"]
-        
-        for server_url in server_urls:
-            try:
-                if server_url:
-                    translator = deepl.Translator(deepl_key, server_url=server_url)
-                else:
-                    translator = deepl.Translator(deepl_key)
-                test_result = translator.translate_text("test", source_lang="AR", target_lang="DE")
-                print(f"  DeepL API connected successfully")
-                break
-            except deepl.exceptions.AuthorizationException as e:
-                print(f"  DeepL auth error: {e}")
-                print("  Falling back to Google Translate.")
-                translator = None
-                break
-            except Exception as e:
-                print(f"  DeepL error ({type(e).__name__}): {e}")
-                print("  Falling back to Google Translate.")
-                translator = None
-                break
-        
-        if translator:
-            total = len(segments)
-            for idx, seg in enumerate(segments, 1):
-                text = seg["text"].strip()
-                if text:
-                    result = translator.translate_text(text, source_lang="AR", target_lang="DE")
-                    translation = result[0] if isinstance(result, list) else result
-                    seg["text"] = translation.text
-                if idx % 5 == 0 or idx == total:
-                    print(f"  Progress: {idx}/{total} ({idx*100//total}%)")
-            return segments
-
-    # Priority 3: Google Translate (free fallback)
+    # Priority 2: Google Translate (free fallback)
     print(f"  Translating {len(segments)} segments Arabic → German (Google Translate — free, no key needed) ...")
-    print(f"  Tip: Set OPENAI_API_KEY or DEEPL_AUTH_KEY for better quality translations.")
+    print(f"  Tip: Set OPENAI_API_KEY for better quality translations.")
     translator = GoogleTranslator(source="ar", target="de")
-    for seg in segments:
+    total = len(segments)
+    for idx, seg in enumerate(segments, 1):
         text = seg["text"].strip()
         if text:
             result = translator.translate(text)
             seg["text"] = result if isinstance(result, str) else str(result)
+        if idx % 5 == 0 or idx == total:
+            print(f"  Progress: {idx}/{total} ({idx*100//total}%)")
     return segments
 
 

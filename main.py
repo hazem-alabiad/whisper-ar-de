@@ -188,32 +188,35 @@ def translate_segments(segments: list) -> list:
         print(f"  Translating {len(segments)} segments Arabic → German (DeepL) ...")
         translator = None
         
-        # Try Pro API first (api.deepl.com), then Free API (api-free.deepl.com)
-        for server_url in [None, "https://api-free.deepl.com"]:
+        # Detect if this is a Free API key (ends with :fx)
+        is_free_api = auth_key.endswith(":fx")
+        # Free API keys MUST use api-free.deepl.com endpoint
+        if is_free_api:
+            server_urls = ["https://api-free.deepl.com"]
+        else:
+            server_urls = [None, "https://api-free.deepl.com"]
+        
+        for server_url in server_urls:
             try:
                 if server_url:
                     translator = deepl.Translator(auth_key, server_url=server_url)
+                    print(f"  Using Free API endpoint")
                 else:
                     translator = deepl.Translator(auth_key)
+                    print(f"  Using Pro API endpoint")
                 test_result = translator.translate_text("test", source_lang="AR", target_lang="DE")
-                print(f"  DeepL API connected ({'Free' if server_url else 'Pro'} endpoint)")
+                print(f"  DeepL API connected successfully")
                 break
             except deepl.exceptions.AuthorizationException as e:
-                if server_url:
-                    # Both endpoints failed
-                    print(f"  DeepL auth error: {e}")
-                    print("  Falling back to Google Translate.")
-                    translator = None
-                    break
-                # Try Free API next
-                continue
+                print(f"  DeepL auth error: {e}")
+                print("  Falling back to Google Translate.")
+                translator = None
+                break
             except Exception as e:
-                if server_url:
-                    print(f"  DeepL error ({type(e).__name__}): {e}")
-                    print("  Falling back to Google Translate.")
-                    translator = None
-                    break
-                continue
+                print(f"  DeepL error ({type(e).__name__}): {e}")
+                print("  Falling back to Google Translate.")
+                translator = None
+                break
         
         if translator:
             total = len(segments)

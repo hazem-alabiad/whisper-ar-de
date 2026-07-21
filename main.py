@@ -166,6 +166,9 @@ def transcribe_arabic(audio_path: Path, model_name: str) -> list:
         str(audio_path),
         path_or_hf_repo=f"mlx-community/whisper-{model_name}",
      
+     
+     
+     
         language="ar",
         verbose=False,
     )
@@ -183,28 +186,46 @@ def translate_segments(segments: list) -> list:
 
     if use_deepl:
         print(f"  Translating {len(segments)} segments Arabic → German (DeepL) ...")
-        try:
-            translator = deepl.Translator(auth_key)
-            test_result = translator.translate_text("test", source_lang="AR", target_lang="DE")
-            print(f"  DeepL API test successful")
-            for seg in segments:
+        translator = None
+        
+        # Try Pro API first (api.deepl.com), then Free API (api-free.deepl.com)
+        for server_url in [None, "https://api-free.deepl.com"]:
+            try:
+                if server_url:
+                    translator = deepl.Translator(auth_key, server_url=server_url)
+                else:
+                    translator = deepl.Translator(auth_key)
+                test_result = translator.translate_text("test", source_lang="AR", target_lang="DE")
+                print(f"  DeepL API connected ({'Free' if server_url else 'Pro'} endpoint)")
+                break
+            except deepl.exceptions.AuthorizationException as e:
+                if server_url:
+                    # Both endpoints failed
+                    print(f"  DeepL auth error: {e}")
+                    print("  Falling back to Google Translate.")
+                    translator = None
+                    break
+                # Try Free API next
+                continue
+            except Exception as e:
+                if server_url:
+                    print(f"  DeepL error ({type(e).__name__}): {e}")
+                    print("  Falling back to Google Translate.")
+                    translator = None
+                    break
+                continue
+        
+        if translator:
+            total = len(segments)
+            for idx, seg in enumerate(segments, 1):
                 text = seg["text"].strip()
                 if text:
                     result = translator.translate_text(text, source_lang="AR", target_lang="DE")
                     translation = result[0] if isinstance(result, list) else result
                     seg["text"] = translation.text
-        except deepl.exceptions.AuthorizationException as e:
-            print(f"  DeepL auth error: {e}")
-            print("  Falling back to Google Translate.")
-            translator = GoogleTranslator(source="ar", target="de")
-            for seg in segments:
-                text = seg["text"].strip()
-                if text:
-                    result = translator.translate(text)
-                    seg["text"] = result if isinstance(result, str) else str(result)
-        except Exception as e:
-            print(f"  DeepL error ({type(e).__name__}): {e}")
-            print("  Falling back to Google Translate.")
+                if idx % 5 == 0 or idx == total:
+                    print(f"  Progress: {idx}/{total} ({idx*100//total}%)")
+        else:
             translator = GoogleTranslator(source="ar", target="de")
             for seg in segments:
                 text = seg["text"].strip()

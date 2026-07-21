@@ -176,6 +176,7 @@ def translate_segments(segments: list, output_dir: Path | None = None) -> list:
     """Translate each segment's text from Arabic to German.
 
     Supports resume capability - if interrupted, re-run to continue from last checkpoint.
+    Live backup: saves translation after each segment completes.
     
     Uses best available translation backend in priority order:
     1. OpenAI GPT-4 (best quality, requires OPENAI_API_KEY) - parallel bulk translation
@@ -185,12 +186,12 @@ def translate_segments(segments: list, output_dir: Path | None = None) -> list:
 
     # Priority 1: OpenAI GPT-4 (best quality for Arabic→German) - PARALLEL BULK MODE
     if openai_key:
-        print(f"  Translating {len(segments)} segments Arabic → German (OpenAI GPT-4 - parallel bulk mode) ...")
+        print(f"  Translating {len(segments)} segments Arabic → German (OpenAI GPT-4 - ultra-fast mode) ...")
         try:
             client = OpenAI(api_key=openai_key)
             total = len(segments)
-            batch_size = 10
-            max_workers = 5  # Run 5 batches in parallel
+            batch_size = 20  # Larger batches
+            max_workers = 10  # More parallel workers
             
             # Resume support: mark segments already translated
             translated_indices = set()
@@ -208,6 +209,18 @@ def translate_segments(segments: list, output_dir: Path | None = None) -> list:
                     progress_file = output_dir / "translation_progress.json"
                     with open(progress_file, "w") as f:
                         json.dump(list(translated_indices), f)
+            
+            def save_live_backup(batch_start: int, batch_end: int):
+                """Save translated segments to SRT file immediately after translation."""
+                if output_dir:
+                    # Save partial German SRT
+                    temp_srt = output_dir / f"{output_dir.name}_de_temp.srt"
+                    with open(temp_srt, "w", encoding="utf-8") as f:
+                        for i, seg in enumerate(segments[:batch_end], start=1):
+                            if i <= batch_end and seg["text"].strip():
+                                f.write(f"{i}\n")
+                                f.write(f"{format_time(seg['start'])} --> {format_time(seg['end'])}\n")
+                                f.write(f"{seg['text'].strip()}\n\n")
             
             def translate_batch(batch_start: int, batch_end: int) -> int:
                 """Translate a batch of segments."""
@@ -253,6 +266,7 @@ def translate_segments(segments: list, output_dir: Path | None = None) -> list:
                 for i in range(batch_start, batch_end):
                     translated_indices.add(i)
                 save_progress()
+                save_live_backup(batch_start, batch_end)  # Save immediately
                 
                 return batch_end
             
@@ -270,10 +284,10 @@ def translate_segments(segments: list, output_dir: Path | None = None) -> list:
                 for future in as_completed(futures):
                     batch_end = future.result()
                     completed = max(completed, batch_end)
-                    if completed % 20 == 0 or completed == total:
+                    if completed % 10 == 0 or completed == total:
                         print(f"  Progress: {completed}/{total} ({completed*100//total}%)")
             
-            print(f"  OpenAI parallel bulk translation completed successfully")
+            print(f"  OpenAI ultra-fast translation completed successfully")
             return segments
         except Exception as e:
             print(f"  OpenAI error ({type(e).__name__}): {e}")

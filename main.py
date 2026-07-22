@@ -294,20 +294,18 @@ def translate_with_google(text: str, source: str, target: str) -> str:
 
 
 def get_translation_backend(args) -> tuple:
-    """Return the best available translation backend and its name."""
+    """Return the best available translation backend and its name.
+    
+    Always uses Google Translate (free) as the primary translation backend.
+    AI models (OpenAI, OpenRouter, DeepSeek) are only used for verification.
+    """
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
     openrouter_key = args.openrouter_key or os.getenv("OPENROUTER_API_KEY", "").strip()
     deepseek_key = args.deepseek_key or os.getenv("DEEPSEEK_API_KEY", "").strip()
 
-    if openai_key:
-        client = OpenAI(api_key=openai_key)
-        return ("openai", client, openai_key, openrouter_key, deepseek_key)
-    elif openrouter_key:
-        return ("openrouter", None, openai_key, openrouter_key, deepseek_key)
-    elif deepseek_key:
-        return ("deepseek", None, openai_key, openrouter_key, deepseek_key)
-    else:
-        return ("google", None, openai_key, openrouter_key, deepseek_key)
+    # Always use Google Translate (free) as primary backend
+    # AI keys are kept for verification only
+    return ("google", None, openai_key, openrouter_key, deepseek_key)
 
 
 def translate_segment(text: str, source: str, target: str, backend: str, client, openrouter_key: str, deepseek_key: str) -> str:

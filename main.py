@@ -762,25 +762,31 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
         filter_parts = []
         current_label = "[0:v]"
 
+        # Enhanced subtitle styling with high-quality readable fonts
+        # Style: Bold outline with semi-transparent background for optimal readability
+        german_style = "FontName=Arial,FontSize=26,PrimaryColour=&HFFFFFF&,SecondaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=-1,Italic=0,BorderStyle=1,Outline=3,Shadow=1,MarginV=20,Alignment=8"  # Top center
+        english_style = "FontName=Arial,FontSize=22,PrimaryColour=&H00FFFF&,SecondaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=-1,Italic=0,BorderStyle=1,Outline=3,Shadow=1,MarginV=20,Alignment=5"  # Middle center
+        arabic_style = "FontName=Arial,FontSize=26,PrimaryColour=&HFFFFFF&,SecondaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=-1,Italic=0,BorderStyle=1,Outline=3,Shadow=1,MarginV=20,Alignment=2"  # Bottom left (RTL support)
+
         # German on top
         if ("de", german_srt) in subtitle_inputs:
             de_idx = subtitle_inputs.index(("de", german_srt)) + 1
             filter_parts.append(
-                f"{current_label}subtitles={str(german_srt)}:force_style='Alignment=Top,FontSize=24,PrimaryColour=&HFFFFFF&'[v{len(filter_parts)+1}]"
+                f"{current_label}subtitles={str(german_srt)}:force_style='{german_style}'[v{len(filter_parts)+1}]"
             )
             current_label = f"[v{len(filter_parts)+1}]"
 
         # English in middle
         if ("en", english_srt) in subtitle_inputs:
             filter_parts.append(
-                f"{current_label}subtitles={str(english_srt)}:force_style='Alignment=Middle,FontSize=20,PrimaryColour=&HFFFF00&'[v{len(filter_parts)+1}]"
+                f"{current_label}subtitles={str(english_srt)}:force_style='{english_style}'[v{len(filter_parts)+1}]"
             )
             current_label = f"[v{len(filter_parts)+1}]"
 
         # Arabic on bottom
         if ("ar", arabic_srt) in subtitle_inputs:
             filter_parts.append(
-                f"{current_label}subtitles={str(arabic_srt)}:force_style='Alignment=Bottom,FontSize=24,PrimaryColour=&HFFFFFF&'[vout]"
+                f"{current_label}subtitles={str(arabic_srt)}:force_style='{arabic_style}'[vout]"
             )
 
         cmd.extend(["-filter_complex", ";".join(filter_parts)])
@@ -788,9 +794,10 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
         cmd.extend(["-map", "0:a?"])
 
     cmd.extend([
-        "-c:v", "libx264", "-b:v", f"{video_bitrate}k",
+        "-c:v", "libx264", "-preset", "slow", "-crf", "23", "-b:v", f"{video_bitrate}k",
         "-c:a", "aac", "-b:a", f"{audio_bitrate}k",
         "-movflags", "+faststart",
+        "-pix_fmt", "yuv420p",
         str(output_path),
     ])
 

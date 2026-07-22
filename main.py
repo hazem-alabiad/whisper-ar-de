@@ -854,26 +854,6 @@ def parse_args():
         "--no-cleanup", action="store_true",
         help="Skip cleanup of temporary files after completion",
     )
-    parser.add_argument(
-        "--no-retranslate", action="store_true",
-        help="Skip re-translation even if German SRT has Arabic script",
-    )
-    parser.add_argument(
-        "--no-verify", action="store_true",
-        help="Skip multi-AI translation verification",
-    )
-    parser.add_argument(
-        "--openrouter-key", type=str, default=None,
-        help="OpenRouter API key for translation/verification",
-    )
-    parser.add_argument(
-        "--deepseek-key", type=str, default=None,
-        help="DeepSeek API key for translation/verification",
-    )
-    parser.add_argument(
-        "--no-double-check-arabic", action="store_true",
-        help="Skip double-checking Arabic transcription",
-    )
     return parser.parse_args()
 
 
@@ -941,8 +921,8 @@ def main():
         segments = read_srt(arabic_srt)
         print(f"       {len(segments)} segments loaded")
 
-        # Double-check Arabic transcription always (unless skipped)
-        if not args.no_double_check_arabic and audio_path and audio_path.exists():
+        # Double-check Arabic transcription always
+        if audio_path and audio_path.exists():
             print(f"\n  Double-checking Arabic transcription...")
             double_check_segments = double_check_arabic_srt(segments, audio_path, args.model)
             print(f"  Double-check completed: {len(double_check_segments)} segments")
@@ -956,10 +936,9 @@ def main():
         write_srt(segments, arabic_srt)
         print(f"       Arabic SRT: {arabic_srt.name} ({len(segments)} segments)")
 
-    # Step 3: Translate (skip if German SRT exists AND not force-retranslate)
-    # Always re-translate if German SRT has Arabic script (unless --no-retranslate)
+    # Step 3: Translate (skip if German SRT exists and has proper German text)
     needs_retranslate = False
-    if german_srt.exists() and not args.no_retranslate:
+    if german_srt.exists():
         de_segments = read_srt(german_srt)
         if de_segments:
             # Check if German SRT actually contains Arabic text

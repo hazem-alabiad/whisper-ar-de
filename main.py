@@ -40,9 +40,7 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -235,7 +233,8 @@ def translate_with_openai(client: OpenAI, text: str, source: str, target: str) -
         ],
         temperature=0.3,
     )
-    return response.choices[0].message.content.strip()
+    content = response.choices[0].message.content
+    return content.strip() if content else text
 
 
 def translate_with_openrouter(text: str, source: str, target: str, api_key: str) -> str:

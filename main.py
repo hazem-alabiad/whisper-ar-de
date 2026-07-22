@@ -3,8 +3,8 @@ YouTube Arabic → German Pipeline
 =================================
 
 Downloads a YouTube video, transcribes Arabic audio to SRT,
-translates to German SRT, generates German AI speech,
-and compresses the video to ~50 MB.
+translates to German SRT (verified with Google Translate),
+and compresses the video to ~50 MB with burned subtitles.
 
 Uses MLX-Whisper for fast transcription on Apple Silicon GPU.
 Resume support: re-run the same command and it detects existing
@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -31,7 +32,6 @@ from openai import OpenAI
 
 import mlx_whisper
 from deep_translator import GoogleTranslator
-from gtts import gTTS
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -56,6 +56,16 @@ def parse_args():
         type=str,
         default="output",
         help="Output directory (default: output/)",
+    )
+    parser.add_argument(
+        "--min-quality",
+        action="store_true",
+        help="Download minimum quality video/audio to save bandwidth and space",
+    )
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="Clean up temporary files (translation_progress.json, translation_temp.srt, temp audio/video) after completion",
     )
     return parser.parse_args()
 
@@ -130,13 +140,19 @@ def read_srt_arabic(srt_path: Path) -> list:
     return segments
 
 
-def download_youtube(url: str, output_dir: Path) -> dict:
+def download_youtube(url: str, output_dir: Path, min_quality: bool = False) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if min_quality:
+        # Download minimum quality: worst video + worst audio
+        video_format = "worstvideo[ext=mp4]+worstaudio[ext=m4a]/worst[ext=mp4]/worst"
+    else:
+        # Default: best quality
+        video_format = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
 
     video_template = output_dir / "%(id)s_video.%(ext)s"
     subprocess.run(
-        ["yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-         "-o", str(video_template), url],
+        ["yt-dlp", "-f", video_format, "-o", str(video_template), url],
         check=True, capture_output=True, text=True,
     )
 
@@ -398,20 +414,31 @@ def translate_segments(segments: list, output_dir: Path | None = None) -> list:
     return segments
 
 
-def generate_german_audio(segments: list, output_path: Path) -> None:
-    """Generate German speech audio from translated segments using gTTS."""
-    full_text = " ".join(seg["text"] for seg in segments if seg["text"].strip())
-    if not full_text:
-        print("  Warning: No German text to convert to speech.")
-        return
+def cleanup_temp_files(output_dir: Path, base_name: str, keep_compressed: bool = True) -> None:
+    """Clean up temporary files after pipeline completion."""
+    temp_files = [
+        output_dir / "translation_progress.json",
+        output_dir / "translation_temp.srt",
+    ]
+    
+    # Also clean up the original downloaded video/audio files (video_id prefixed)
+    for pattern in ["*_video.mp4", "*.mp3"]:
+        for f in output_dir.glob(pattern):
+            # Don't delete the compressed video or the final output files
+            if not f.name.startswith(base_name):
+                temp_files.append(f)
+    
+    for temp_file in temp_files:
+        if temp_file.exists():
+            try:
+                temp_file.unlink()
+                print(f"  Cleaned up: {temp_file.name}")
+            except Exception as e:
+                print(f"  [WARNING] Could not delete {temp_file.name}: {e}")
 
-    print(f"  Generating German audio via gTTS ({len(full_text)} chars)...")
-    tts = gTTS(text=full_text, lang="de", slow=False)
-    tts.save(str(output_path))
 
-
-def compress_video(video_path: Path, output_path: Path, target_mb: int) -> None:
-    """Compress video to target size using ffmpeg."""
+def compress_video(video_path: Path, output_path: Path, target_mb: int, arabic_srt: Path | None = None, german_srt: Path | None = None) -> None:
+    """Compress video and burn subtitles using ffmpeg with progress bar."""
     if not video_path.exists():
         print(f"  Warning: Video not found at {video_path}, skipping compression.")
         return
@@ -440,18 +467,69 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int) -> None:
     video_bitrate = target_bitrate - audio_bitrate * 1024
 
     print(f"  Duration: {duration:.0f}s, target bitrate: {target_bitrate // 1000} kbps")
-    print(f"  Compressing video (this may take a while)...")
 
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", str(video_path),
-            "-c:v", "libx264", "-b:v", f"{video_bitrate}k",
-            "-c:a", "aac", "-b:a", f"{audio_bitrate}k",
-            "-movflags", "+faststart",
-            str(output_path),
-        ],
-        check=True, capture_output=True, text=True,
+    # Build ffmpeg command with optional subtitles
+    cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+    
+    # Add subtitle inputs if provided
+    has_subtitles = False
+    if german_srt and german_srt.exists():
+        cmd.extend(["-i", str(german_srt)])
+        has_subtitles = True
+    if arabic_srt and arabic_srt.exists():
+        cmd.extend(["-i", str(arabic_srt)])
+        has_subtitles = True
+    
+    # Build filter for burning subtitles
+    if has_subtitles and german_srt and german_srt.exists() and arabic_srt and arabic_srt.exists():
+        # Burn both subtitles - German on top, Arabic on bottom
+        cmd.extend([
+            "-filter_complex", 
+            f"[0:v]subtitles={str(german_srt)}:force_style='Alignment=Top,FontSize=24,PrimaryColour=&HFFFFFF&'[v1];"
+            f"[v1]subtitles={str(arabic_srt)}:force_style='Alignment=Bottom,FontSize=24,PrimaryColour=&HFFFFFF&'[vout]",
+            "-map", "[vout]",
+            "-map", "0:a?",
+        ])
+    elif has_subtitles and german_srt and german_srt.exists():
+        cmd.extend(["-vf", f"subtitles={str(german_srt)}"])
+    elif has_subtitles and arabic_srt and arabic_srt.exists():
+        cmd.extend(["-vf", f"subtitles={str(arabic_srt)}"])
+    
+    cmd.extend([
+        "-c:v", "libx264", "-b:v", f"{video_bitrate}k",
+        "-c:a", "aac", "-b:a", f"{audio_bitrate}k",
+        "-movflags", "+faststart",
+        str(output_path),
+    ])
+    
+    # Run with progress monitoring
+    print(f"  Compressing video with progress bar...")
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
     )
+    
+    # Parse ffmpeg progress from stderr
+    import time
+    start_time = time.time()
+    last_update = 0
+    
+    if process.stdout:
+        for line in process.stdout:
+            time_match = re.search(r"time=(\d+):(\d+):(\d+\.\d+)", line)
+            if time_match:
+                hours, mins, secs = time_match.groups()
+                elapsed = int(hours) * 3600 + int(mins) * 60 + float(secs)
+                if duration > 0 and time.time() - last_update > 1:
+                    progress_pct = min(100, int(elapsed * 100 / duration))
+                    print(f"\r  Progress: {progress_pct}% ({elapsed:.0f}s/{int(duration)}s)", end="", flush=True)
+                    last_update = time.time()
+
+    process.wait()
+    print()  # New line after progress
 
     final_mb = output_path.stat().st_size / (1024 * 1024)
     print(f"  Compressed video size: {final_mb:.1f} MB")
@@ -491,7 +569,6 @@ def main():
     # Define output paths early
     arabic_srt = output_dir / f"{base_name}_ar.srt"
     german_srt = output_dir / f"{base_name}_de.srt"
-    german_audio = output_dir / f"{base_name}_de.mp3"
     compressed_video = output_dir / f"{base_name}_compressed.mp4"
 
     # Step 1: Download (skip if video+audio exist)
@@ -506,7 +583,7 @@ def main():
         print(f"       Audio: {audio_path.name}")
     else:
         print("\n[1/5] Downloading video & audio...")
-        media = download_youtube(args.url, output_dir)
+        media = download_youtube(args.url, output_dir, args.min_quality)
         video_path = media["video"]
         audio_path = media["audio"]
         print(f"       Video: {video_path.name}")
@@ -526,8 +603,17 @@ def main():
     # Step 3: Translate (skip if German SRT exists)
     if german_srt.exists():
         print(f"\n[3/5] Already translated — loading from {german_srt.name}")
+        # Load Arabic SRT for verification
+        arabic_segments = read_srt_arabic(arabic_srt) if arabic_srt.exists() else []
         segments = read_srt_arabic(german_srt)
+        # Store original Arabic texts for verification
+        for i, seg in enumerate(segments):
+            if i < len(arabic_segments):
+                seg["original_ar"] = arabic_segments[i]["text"]
         print(f"       {len(segments)} segments loaded")
+        
+        # Verify existing translations with Google Translate (free API)
+        verify_translations_with_google(segments)
     else:
         print(f"\n[3/5] Translating to German...")
         segments = translate_segments(segments, output_dir)
@@ -537,27 +623,23 @@ def main():
         # Verify translations with Google Translate (free API)
         verify_translations_with_google(segments)
 
-    # Step 4: German audio (skip if exists)
-    if german_audio.exists():
-        print(f"\n[4/5] German audio already generated: {german_audio.name}")
-    else:
-        print(f"\n[4/5] Generating German audio via AI...")
-        generate_german_audio(segments, german_audio)
-        print(f"       German audio: {german_audio.name}")
-
-    # Step 5: Compress video (skip if exists)
+    # Step 4: Compress video (skip if exists)
     if compressed_video.exists():
-        print(f"\n[5/5] Compressed video already exists: {compressed_video.name}")
+        print(f"\n[4/5] Compressed video already exists: {compressed_video.name}")
     else:
-        print(f"\n[5/5] Compressing video (target: {args.target_size} MB)...")
-        compress_video(video_path, compressed_video, args.target_size)
+        print(f"\n[4/5] Compressing video (target: {args.target_size} MB)...")
+        compress_video(video_path, compressed_video, args.target_size, arabic_srt, german_srt)
+
+    # Step 5: Clean up temporary files if requested
+    if args.cleanup:
+        print(f"\n[5/5] Cleaning up temporary files...")
+        cleanup_temp_files(output_dir, base_name)
 
     print(f"\n{'='*60}")
     print(f"  All done! Files in '{output_dir}/':")
     print(f"     - {arabic_srt.name}  (Arabic subtitles)")
     print(f"     - {german_srt.name}   (German subtitles)")
-    print(f"     - {german_audio.name}  (German AI speech)")
-    print(f"     - {compressed_video.name}  (compressed video)")
+    print(f"     - {compressed_video.name}  (compressed video with burned subtitles)")
     print(f"{'='*60}\n")
 
 

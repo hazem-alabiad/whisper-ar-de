@@ -46,11 +46,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import cast
 
+import time
+
+import requests
+from deep_translator import GoogleTranslator
 from dotenv import load_dotenv
 from openai import OpenAI
 
 import mlx_whisper
-from deep_translator import GoogleTranslator
 
 # ─── Language Detection ───────────────────────────────────────────
 
@@ -239,7 +242,6 @@ def translate_with_openai(client: OpenAI, text: str, source: str, target: str) -
 
 def translate_with_openrouter(text: str, source: str, target: str, api_key: str) -> str:
     """Translate text using OpenRouter."""
-    import requests
     response = requests.post(
         url="https://openrouter.ai/api/v1/chat/completions",
         headers={
@@ -263,7 +265,6 @@ def translate_with_openrouter(text: str, source: str, target: str, api_key: str)
 
 def translate_with_deepseek(text: str, source: str, target: str, api_key: str) -> str:
     """Translate text using DeepSeek."""
-    import requests
     response = requests.post(
         url="https://api.deepseek.com/v1/chat/completions",
         headers={
@@ -377,6 +378,17 @@ def multi_pass_translate(text: str, source: str, target: str, args, client) -> s
     return primary
 
 
+def _assign_translations(batch: list, combined_text: str, lang_key: str) -> None:
+    """Parse a combined numbered translation block back into the batch."""
+    lines = combined_text.strip().split("\n\n")
+    for idx, line in enumerate(lines):
+        if idx < len(batch) and line.strip():
+            cleaned = line.strip()
+            if cleaned.startswith("["):
+                cleaned = cleaned.split("]", 1)[1].strip()
+            batch[idx][lang_key] = cleaned
+
+
 def translate_segments(segments: list, output_dir: Path | None, args, client) -> list:
     """Translate each segment's text from Arabic to German and English.
 
@@ -485,23 +497,11 @@ def translate_segments(segments: list, output_dir: Path | None, args, client) ->
 
         # Parse German translations
         if de_text:
-            de_lines = de_text.strip().split("\n\n")
-            for i, line in enumerate(de_lines):
-                if i < len(batch) and line.strip():
-                    cleaned = line.strip()
-                    if cleaned.startswith("["):
-                        cleaned = cleaned.split("]", 1)[1].strip()
-                    batch[i]["text_de"] = cleaned
+            _assign_translations(batch, de_text, lang_key="text_de")
 
         # Parse English translations
         if en_text:
-            en_lines = en_text.strip().split("\n\n")
-            for i, line in enumerate(en_lines):
-                if i < len(batch) and line.strip():
-                    cleaned = line.strip()
-                    if cleaned.startswith("["):
-                        cleaned = cleaned.split("]", 1)[1].strip()
-                    batch[i]["text_en"] = cleaned
+            _assign_translations(batch, en_text, lang_key="text_en")
 
         # Mark as translated
         for i in range(batch_start, batch_end):
@@ -802,7 +802,9 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
     ])
 
     # Run with progress monitoring
-    print(f"  Compressing video with progress bar...")
+    print("  Compressing video with progress bar...")
+    last_update = 0.0
+
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -811,22 +813,24 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
         bufsize=1,
     )
 
-    import time
-    start_time = time.time()
-    last_update = 0
-
-    if process.stdout:
-        for line in process.stdout:
-            time_match = re.search(r"time=(\d+):(\d+):(\d+\.\d+)", line)
-            if time_match:
-                hours, mins, secs = time_match.groups()
-                elapsed = int(hours) * 3600 + int(mins) * 60 + float(secs)
-                if duration > 0 and time.time() - last_update > 1:
-                    progress_pct = min(100, int(elapsed * 100 / duration))
-                    print(f"\r  Progress: {progress_pct}% ({elapsed:.0f}s/{int(duration)}s)", end="", flush=True)
-                    last_update = time.time()
-
-    process.wait()
+    try:
+        if process.stdout:
+            for line in process.stdout:
+                time_match = re.search(r"time=(\d+):(\d+):(\d+\.\d+)", line)
+                if time_match:
+                    hours, mins, secs = time_match.groups()
+                    elapsed = int(hours) * 3600 + int(mins) * 60 + float(secs)
+                    now = time.time()
+                    if duration > 0 and now - last_update > 1:
+                        progress_pct = min(100, int(elapsed * 100 / duration))
+                        print(
+                            f"\r  Progress: {progress_pct}% ({elapsed:.0f}s/{int(duration)}s)",
+                            end="",
+                            flush=True,
+                        )
+                        last_update = now
+    finally:
+        process.wait()
     print()
 
     final_mb = output_path.stat().st_size / (1024 * 1024)
@@ -885,7 +889,7 @@ def main():
         break
 
     if existing_ar_srt:
-        base_name = existing_ar_srt.stem[:-3]
+        base_name = existing_ar_srt.stem.removesuffix("_ar")
         print(f"  Found existing Arabic SRT: {existing_ar_srt.name}")
         print(f"     Resume with base name: {base_name}")
         answer = input("  Re-use this base name? [Y/n]: ").strip().lower()

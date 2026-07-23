@@ -51,7 +51,6 @@ import time
 import requests
 from deep_translator import GoogleTranslator
 from dotenv import load_dotenv
-from openai import OpenAI
 
 import mlx_whisper
 
@@ -226,18 +225,50 @@ def double_check_arabic_srt(segments: list, audio_path: Path, model_name: str) -
 
 # ─── Translation Backends ─────────────────────────────────────────
 
-def translate_with_openai(client: OpenAI, text: str, source: str, target: str) -> str:
-    """Translate text using OpenAI GPT-4."""
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": f"You are a professional translator. Translate from {source} to {target}. Return only the translation, no extra text."},
-            {"role": "user", "content": text},
-        ],
-        temperature=0.3,
-    )
-    content = response.choices[0].message.content
-    return content.strip() if content else text
+def translate_batch_with_deepl(texts: list, source: str, target: str, api_key: str) -> list:
+    """Translate a list of texts using DeepL API in a single batch request."""
+    if not api_key or not texts:
+        return texts
+    
+    # DeepL Free API key ends with :fx. Standard Pro key doesn't.
+    base_url = "https://api-free.deepl.com" if api_key.endswith(":fx") else "https://api.deepl.com"
+    url = f"{base_url}/v2/translate"
+    
+    # DeepL requires target language code to be uppercase, and EN must specify variant (e.g. EN-US).
+    target_lang = target.upper()
+    if target_lang == "EN":
+        target_lang = "EN-US"
+        
+    source_lang = source.upper()
+    
+    try:
+        response = requests.post(
+            url,
+            headers={
+                "Authorization": f"DeepL-Auth-Key {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "text": texts,
+                "source_lang": source_lang,
+                "target_lang": target_lang,
+            },
+            timeout=30
+        )
+        response.raise_for_status()
+        result = response.json()
+        return [t["text"] for t in result["translations"]]
+    except Exception as e:
+        print(f"  [WARNING] DeepL batch translation failed: {e}")
+        raise
+
+def translate_with_deepl(text: str, source: str, target: str, api_key: str) -> str:
+    """Translate a single text using DeepL API."""
+    try:
+        results = translate_batch_with_deepl([text], source, target, api_key)
+        return results[0] if results else text
+    except Exception:
+        return text
 
 
 def translate_with_openrouter(text: str, source: str, target: str, api_key: str) -> str:
@@ -294,25 +325,22 @@ def translate_with_google(text: str, source: str, target: str) -> str:
 
 
 def get_translation_backend(args) -> tuple:
-    """Return the best available translation backend and its name.
-    
-    Always uses Google Translate (free) as the primary translation backend.
-    AI models (OpenAI, OpenRouter, DeepSeek) are only used for verification.
-    """
-    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
-    openrouter_key = args.openrouter_key or os.getenv("OPENROUTER_API_KEY", "").strip()
-    deepseek_key = args.deepseek_key or os.getenv("DEEPSEEK_API_KEY", "").strip()
+    """Return the best available translation backend and its name."""
+    deepl_key = getattr(args, "deepl_key", None) or os.getenv("DEEPL_API_KEY", "").strip()
+    openrouter_key = getattr(args, "openrouter_key", None) or os.getenv("OPENROUTER_API_KEY", "").strip()
+    deepseek_key = getattr(args, "deepseek_key", None) or os.getenv("DEEPSEEK_API_KEY", "").strip()
 
-    # Always use Google Translate (free) as primary backend
-    # AI keys are kept for verification only
-    return ("google", None, openai_key, openrouter_key, deepseek_key)
+    # If DeepL key is available, use it as the primary backend!
+    if deepl_key:
+        return ("deepl", deepl_key, openrouter_key, deepseek_key)
+    return ("google", "", openrouter_key, deepseek_key)
 
 
-def translate_segment(text: str, source: str, target: str, backend: str, client, openrouter_key: str, deepseek_key: str) -> str:
+def translate_segment(text: str, source: str, target: str, backend: str, deepl_key: str, openrouter_key: str, deepseek_key: str) -> str:
     """Translate a single segment using the specified backend."""
     try:
-        if backend == "openai" and client:
-            return translate_with_openai(client, text, source, target)
+        if backend == "deepl" and deepl_key:
+            return translate_with_deepl(text, source, target, deepl_key)
         elif backend == "openrouter" and openrouter_key:
             return translate_with_openrouter(text, source, target, openrouter_key)
         elif backend == "deepseek" and deepseek_key:
@@ -329,55 +357,6 @@ def translate_segment(text: str, source: str, target: str, backend: str, client,
             return text
 
 
-# ─── Multi-Pass Translation & Verification ────────────────────────
-
-def multi_pass_translate(text: str, source: str, target: str, args, client) -> str:
-    """Translate text using multiple AI tools and pick the best result.
-
-    Pass 1: Primary backend (OpenAI/OpenRouter/DeepSeek/Google)
-    Pass 2: Google Translate (free)
-    Pass 3: Another AI backend if available
-
-    Returns the translation that both AI tools agree on, or the primary one.
-    """
-    openrouter_key = args.openrouter_key or os.getenv("OPENROUTER_API_KEY", "").strip()
-    deepseek_key = args.deepseek_key or os.getenv("DEEPSEEK_API_KEY", "").strip()
-
-    # Pass 1: Primary backend
-    primary = translate_segment(text, source, target, args._backend, client, openrouter_key, deepseek_key)
-
-    # Pass 2: Google Translate
-    try:
-        google_result = translate_with_google(text, source, target)
-    except Exception:
-        google_result = primary
-
-    # Pass 3: Another AI backend if available
-    if args.triple_check:
-        if args._backend == "openai" and openrouter_key:
-            third = translate_with_openrouter(text, source, target, openrouter_key)
-        elif args._backend == "openrouter" and deepseek_key:
-            third = translate_with_deepseek(text, source, target, deepseek_key)
-        elif args._backend == "openai" and deepseek_key:
-            third = translate_with_deepseek(text, source, target, deepseek_key)
-        else:
-            third = google_result
-
-        # Pick the result that two tools agree on
-        if primary == third:
-            return primary
-        elif primary == google_result:
-            return primary
-        elif third == google_result:
-            return third
-        else:
-            # All three disagree - return primary (best quality)
-            return primary
-
-    # Two-pass: return primary if it's reasonable, else Google
-    return primary
-
-
 def _assign_translations(batch: list, combined_text: str, lang_key: str) -> None:
     """Parse a combined numbered translation block back into the batch."""
     lines = combined_text.strip().split("\n\n")
@@ -389,12 +368,12 @@ def _assign_translations(batch: list, combined_text: str, lang_key: str) -> None
             batch[idx][lang_key] = cleaned
 
 
-def translate_segments(segments: list, output_dir: Path | None, args, client) -> list:
+def translate_segments(segments: list, output_dir: Path | None, args, deepl_key: str) -> list:
     """Translate each segment's text from Arabic to German and English.
 
     Supports resume capability and live backup.
     """
-    backend, _, openai_key, openrouter_key, deepseek_key = get_translation_backend(args)
+    backend, deepl_key, openrouter_key, deepseek_key = get_translation_backend(args)
     args._backend = backend
 
     # Store original Arabic text before translation
@@ -441,67 +420,35 @@ def translate_segments(segments: list, output_dir: Path | None, args, client) ->
             return batch_end
 
         batch = segments[batch_start:batch_end]
-        combined_text = "\n\n".join([f"[{i+1}] {seg['text'].strip()}"
-                                     for i, seg in enumerate(batch) if seg['text'].strip()])
+        valid_indices = [i for i, seg in enumerate(batch) if seg['text'].strip()]
+        texts = [batch[i]['text'].strip() for i in valid_indices]
 
-        if not combined_text:
+        if not texts:
             for i in range(batch_start, batch_end):
                 translated_indices.add(i)
             save_progress()
             return batch_end
 
-        # Translate to German
-        de_prompt = f"""You are a professional Arabic to German translator.
-        Translate each numbered segment from Arabic to natural, fluent German.
-        Keep the same numbering format [N] at the start of each segment.
-        Preserve the meaning and context of each segment.
-        There are {len(batch)} segments to translate."""
-
-        # Translate to English
-        en_prompt = f"""You are a professional Arabic to English translator.
-        Translate each numbered segment from Arabic to natural, fluent English.
-        Keep the same numbering format [N] at the start of each segment.
-        Preserve the meaning and context of each segment.
-        There are {len(batch)} segments to translate."""
-
-        if backend == "openai" and client:
-            de_response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": de_prompt},
-                    {"role": "user", "content": combined_text},
-                ],
-                temperature=0.3,
-            )
-            de_text = de_response.choices[0].message.content
-
-            en_response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": en_prompt},
-                    {"role": "user", "content": combined_text},
-                ],
-                temperature=0.3,
-            )
-            en_text = en_response.choices[0].message.content
+        if backend == "deepl" and deepl_key:
+            try:
+                de_results = translate_batch_with_deepl(texts, "ar", "de", deepl_key)
+                en_results = translate_batch_with_deepl(texts, "ar", "en", deepl_key)
+                for idx, v_idx in enumerate(valid_indices):
+                    batch[v_idx]["text_de"] = de_results[idx]
+                    batch[v_idx]["text_en"] = en_results[idx]
+            except Exception as e:
+                print(f"  [WARNING] DeepL batch translation failed: {e}. Falling back to Google Translate segment-by-segment...")
+                # Fallback to Google
+                for i, seg in enumerate(batch):
+                    if seg['text'].strip():
+                        seg["text_de"] = translate_with_google(seg['text'].strip(), "ar", "de")
+                        seg["text_en"] = translate_with_google(seg['text'].strip(), "ar", "en")
         else:
             # Fallback: translate each segment individually with Google
-            de_text = ""
-            en_text = ""
             for i, seg in enumerate(batch):
                 if seg['text'].strip():
-                    de_seg = translate_with_google(seg['text'].strip(), "ar", "de")
-                    en_seg = translate_with_google(seg['text'].strip(), "ar", "en")
-                    de_text += f"[{i+1}] {de_seg}\n\n"
-                    en_text += f"[{i+1}] {en_seg}\n\n"
-
-        # Parse German translations
-        if de_text:
-            _assign_translations(batch, de_text, lang_key="text_de")
-
-        # Parse English translations
-        if en_text:
-            _assign_translations(batch, en_text, lang_key="text_en")
+                    seg["text_de"] = translate_with_google(seg['text'].strip(), "ar", "de")
+                    seg["text_en"] = translate_with_google(seg['text'].strip(), "ar", "en")
 
         # Mark as translated
         for i in range(batch_start, batch_end):
@@ -512,7 +459,7 @@ def translate_segments(segments: list, output_dir: Path | None, args, client) ->
         return batch_end
 
     # Process batches in parallel
-    print(f"  Translating {total} segments Arabic → German + English ({backend} - {'triple-check' if args.triple_check else 'standard'} mode) ...")
+    print(f"  Translating {total} segments Arabic → German + English ({backend} - standard mode) ...")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for batch_start in range(0, total, batch_size):
@@ -540,23 +487,21 @@ def translate_segments(segments: list, output_dir: Path | None, args, client) ->
 
 # ─── Verification with Report ─────────────────────────────────────
 
-def verify_translations_with_report(segments: list, output_dir: Path, args, client) -> dict:
+def verify_translations_with_report(segments: list, output_dir: Path, args, deepl_key: str) -> dict:
     """Verify translations using multiple AI tools with progress bar and save report.
 
     Pass 1: Google Translate (free)
-    Pass 2: OpenAI GPT-4 (if available)
+    Pass 2: DeepL API (if available)
     Pass 3: OpenRouter (if available)
-
-    Saves a report to reports/ directory.
     """
-    openrouter_key = args.openrouter_key or os.getenv("OPENROUTER_API_KEY", "").strip()
-    deepseek_key = args.deepseek_key or os.getenv("DEEPSEEK_API_KEY", "").strip()
-    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    openrouter_key = getattr(args, "openrouter_key", None) or os.getenv("OPENROUTER_API_KEY", "").strip()
+    deepseek_key = getattr(args, "deepseek_key", None) or os.getenv("DEEPSEEK_API_KEY", "").strip()
+    deepl_key = deepl_key or getattr(args, "deepl_key", None) or os.getenv("DEEPL_API_KEY", "").strip()
 
     print(f"\n  Verifying translations with multiple AI tools...")
     print(f"  Pass 1: Google Translate (free)")
-    if openai_key:
-        print(f"  Pass 2: OpenAI GPT-4")
+    if deepl_key:
+        print(f"  Pass 2: DeepL API")
     if openrouter_key:
         print(f"  Pass 3: OpenRouter")
     if deepseek_key:
@@ -568,8 +513,8 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, clie
         "total_segments": total,
         "google_verified": 0,
         "google_mismatches": 0,
-        "openai_verified": 0,
-        "openai_mismatches": 0,
+        "deepl_verified": 0,
+        "deepl_mismatches": 0,
         "openrouter_verified": 0,
         "openrouter_mismatches": 0,
         "deepseek_verified": 0,
@@ -614,16 +559,16 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, clie
         except Exception as e:
             print(f"  [VERIFY] Segment {idx}: Google error - {e}")
 
-        # Pass 2: OpenAI GPT-4
-        if openai_key and client:
+        # Pass 2: DeepL API
+        if deepl_key:
             try:
-                openai_de = translate_with_openai(client, original_text, "ar", "de")
-                if openai_de.strip() == current_de:
-                    report["openai_verified"] += 1
+                deepl_de = translate_with_deepl(original_text, "ar", "de", deepl_key)
+                if deepl_de.strip() == current_de:
+                    report["deepl_verified"] += 1
                 else:
-                    report["openai_mismatches"] += 1
+                    report["deepl_mismatches"] += 1
             except Exception as e:
-                print(f"  [VERIFY] Segment {idx}: OpenAI error - {e}")
+                print(f"  [VERIFY] Segment {idx}: DeepL error - {e}")
 
         # Pass 3: OpenRouter
         if openrouter_key:
@@ -667,8 +612,8 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, clie
         json.dump(report, f, ensure_ascii=False, indent=2)
 
     print(f"  Google verification: {report['google_verified']} verified, {report['google_mismatches']} mismatches")
-    if openai_key:
-        print(f"  OpenAI verification: {report['openai_verified']} verified, {report['openai_mismatches']} mismatches")
+    if deepl_key:
+        print(f"  DeepL verification: {report['deepl_verified']} verified, {report['deepl_mismatches']} mismatches")
     if openrouter_key:
         print(f"  OpenRouter verification: {report['openrouter_verified']} verified, {report['openrouter_mismatches']} mismatches")
     if deepseek_key:
@@ -678,20 +623,21 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, clie
     return report
 
 
-# ─── Cleanup ──────────────────────────────────────────────────────
-
 def cleanup_temp_files(output_dir: Path, base_name: str) -> None:
-    """Clean up temporary files after pipeline completion."""
+    """Clean up temporary and intermediate files, keeping only merged SRT and compressed video."""
     temp_files = [
         output_dir / "translation_progress.json",
         output_dir / "translation_temp.srt",
+        output_dir / "reports" / "verification_live.json",
+        output_dir / f"{base_name}_ar.srt",
+        output_dir / f"{base_name}_de.srt",
+        output_dir / f"{base_name}_en.srt",
     ]
 
-    # Also clean up the original downloaded video/audio files
-    for pattern in ["*_video.mp4", "*.mp3"]:
+    # Clean up downloaded raw video/audio files
+    for pattern in ["*_video.mp4", "*.mp3", "*_video.m4a", "*_video.webm"]:
         for f in output_dir.glob(pattern):
-            if not f.name.startswith(base_name):
-                temp_files.append(f)
+            temp_files.append(f)
 
     for temp_file in temp_files:
         if temp_file.exists():
@@ -699,7 +645,16 @@ def cleanup_temp_files(output_dir: Path, base_name: str) -> None:
                 temp_file.unlink()
                 print(f"  Cleaned up: {temp_file.name}")
             except Exception as e:
-                print(f"  [WARNING] Could not delete {temp_file.name}: {e}")
+                pass
+
+    # Try to delete reports directory if it is empty
+    reports_dir = output_dir / "reports"
+    if reports_dir.exists() and not any(reports_dir.iterdir()):
+        try:
+            reports_dir.rmdir()
+            print("  Cleaned up: empty reports directory")
+        except Exception:
+            pass
 
 
 # ─── Video Compression ────────────────────────────────────────────
@@ -862,6 +817,10 @@ def parse_args():
         help="Download minimum quality video/audio to save bandwidth and space",
     )
     parser.add_argument(
+        "--deepl-key", type=str,
+        help="DeepL API key for translation/verification",
+    )
+    parser.add_argument(
         "--no-cleanup", action="store_true",
         help="Skip cleanup of temporary files after completion",
     )
@@ -975,12 +934,12 @@ def main():
         print(f"       {len(segments)} segments loaded")
 
         # Verify with multiple AI tools
-        backend, client, openai_key, openrouter_key, deepseek_key = get_translation_backend(args)
+        backend, deepl_key, openrouter_key, deepseek_key = get_translation_backend(args)
         args._backend = backend
-        verify_translations_with_report(segments, output_dir, args, client)
+        verify_translations_with_report(segments, output_dir, args, deepl_key)
     else:
         print(f"\n[3/6] Translating to German + English...")
-        backend, client, openai_key, openrouter_key, deepseek_key = get_translation_backend(args)
+        backend, deepl_key, openrouter_key, deepseek_key = get_translation_backend(args)
         args._backend = backend
 
         if needs_retranslate:
@@ -990,7 +949,7 @@ def main():
             if progress_file.exists():
                 progress_file.unlink()
 
-        segments = translate_segments(segments, output_dir, args, client)
+        segments = translate_segments(segments, output_dir, args, deepl_key)
 
         # Write German SRT
         de_segments = []
@@ -1024,7 +983,7 @@ def main():
         print(f"       Combined SRT: {combined_srt.name}")
 
         # Verify with multiple AI tools
-        verify_translations_with_report(segments, output_dir, args, client)
+        verify_translations_with_report(segments, output_dir, args, deepl_key)
 
     # Step 4: Compress video (skip if exists)
     if compressed_video.exists():
@@ -1034,21 +993,27 @@ def main():
         compress_video(video_path, compressed_video, args.target_size,
                        arabic_srt, german_srt, english_srt, combined_srt)
 
-    # Step 5: Clean up temporary files (always, unless --no-cleanup)
+    # Delete monolingual SRT files (always, keeping only the combined/merged SRT)
+    print("\n[5/6] Deleting monolingual SRT files...")
+    for srt_file in [arabic_srt, german_srt, english_srt]:
+        if srt_file.exists():
+            try:
+                srt_file.unlink()
+                print(f"       Deleted: {srt_file.name}")
+            except Exception as e:
+                print(f"       [WARNING] Could not delete {srt_file.name}: {e}")
+
+    # Clean up temporary/intermediate files (always, unless --no-cleanup)
     if not args.no_cleanup:
-        print(f"\n[5/6] Cleaning up temporary files...")
+        print(f"       Cleaning up temporary files...")
         cleanup_temp_files(output_dir, base_name)
 
     # Step 6: Summary
     print(f"\n[6/6] Summary")
     print(f"\n{'='*60}")
     print(f"  All done! Files in '{output_dir}/':")
-    print(f"     - {arabic_srt.name}  (Arabic subtitles)")
-    print(f"     - {german_srt.name}   (German subtitles)")
-    print(f"     - {english_srt.name}  (English subtitles)")
     print(f"     - {combined_srt.name} (Combined AR/DE/EN subtitles)")
     print(f"     - {compressed_video.name}  (compressed video with burned subtitles)")
-    print(f"     - reports/  (verification reports)")
     print(f"{'='*60}\n")
 
 

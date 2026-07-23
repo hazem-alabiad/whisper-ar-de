@@ -315,11 +315,6 @@ def translate_with_mymemory(text: str, source: str, target: str) -> str:
 
 def get_translation_backend(args) -> tuple:
     """Return the best available translation backend and its name."""
-    deepl_key = getattr(args, "deepl_key", None) or os.getenv("DEEPL_API_KEY", "").strip()
-
-    # If DeepL key is available, use it as the primary backend!
-    if deepl_key:
-        return ("deepl", deepl_key)
     return ("google", "")
 
 
@@ -477,7 +472,7 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
     Pass 2: DeepL API (if available)
     Pass 3: MyMemory Translate (free)
     """
-    deepl_key = deepl_key or getattr(args, "deepl_key", None) or os.getenv("DEEPL_API_KEY", "").strip()
+    deepl_key = ""
 
     total = len(segments)
     

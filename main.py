@@ -201,32 +201,44 @@ def download_youtube(url: str, output_dir: Path, min_quality: bool = False) -> d
 
 # ─── Transcription ─────────────────────────────────────────────────
 
-def transcribe_arabic(audio_path: Path, model_name: str, batch_size: int = 8, condition_on_prev: bool = False) -> list:
+def transcribe_arabic(audio_path: Path, model_name: str, condition_on_prev: bool = False, temperature: float | None = None) -> list:
     """Transcribe Arabic audio using MLX-Whisper on Apple Silicon GPU."""
     print(f"  Transcribing Arabic audio with MLX-Whisper ({model_name})...")
     hf_repo = model_name if "/" in model_name else f"mlx-community/whisper-{model_name}"
+    
+    kwargs = {
+        "path_or_hf_repo": hf_repo,
+        "language": "ar",
+        "verbose": False,
+        "condition_on_previous_text": condition_on_prev,
+    }
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+
     result = mlx_whisper.transcribe(
         str(audio_path),
-        path_or_hf_repo=hf_repo,
-        language="ar",
-        verbose=False,
-        batch_size=batch_size,
-        condition_on_previous_text=condition_on_prev,
+        **kwargs
     )
     return cast(list, result["segments"])
 
 
-def double_check_arabic_srt(segments: list, audio_path: Path, model_name: str, batch_size: int = 8, condition_on_prev: bool = False) -> list:
+def double_check_arabic_srt(segments: list, audio_path: Path, model_name: str, condition_on_prev: bool = False, temperature: float | None = None) -> list:
     """Re-transcribe Arabic audio to double-check the SRT."""
     print(f"  Double-checking Arabic transcription with MLX-Whisper ({model_name})...")
     hf_repo = model_name if "/" in model_name else f"mlx-community/whisper-{model_name}"
+    
+    kwargs = {
+        "path_or_hf_repo": hf_repo,
+        "language": "ar",
+        "verbose": False,
+        "condition_on_previous_text": condition_on_prev,
+    }
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+
     result = mlx_whisper.transcribe(
         str(audio_path),
-        path_or_hf_repo=hf_repo,
-        language="ar",
-        verbose=False,
-        batch_size=batch_size,
-        condition_on_previous_text=condition_on_prev,
+        **kwargs
     )
     return cast(list, result["segments"])
 
@@ -734,74 +746,118 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
 
     print(f"  Duration: {duration:.0f}s, target bitrate: {target_bitrate // 1000} kbps")
 
+    # Check if FFMPEG supports subtitles filter
+    has_subtitles = False
+    try:
+        res = subprocess.run(["ffmpeg", "-filters"], capture_output=True, text=True)
+        has_subtitles = "subtitles" in res.stdout
+    except Exception:
+        pass
+
     # Build ffmpeg command with optional subtitles
     cmd = ["ffmpeg", "-y", "-i", str(video_path)]
 
     # Add subtitle inputs if provided
     subtitle_inputs = []
     if german_srt and german_srt.exists():
-        cmd.extend(["-i", str(german_srt)])
         subtitle_inputs.append(("de", german_srt))
     if english_srt and english_srt.exists():
-        cmd.extend(["-i", str(english_srt)])
         subtitle_inputs.append(("en", english_srt))
     if arabic_srt and arabic_srt.exists():
-        cmd.extend(["-i", str(arabic_srt)])
         subtitle_inputs.append(("ar", arabic_srt))
+    if combined_srt and combined_srt.exists():
+        subtitle_inputs.append(("combined", combined_srt))
 
-    # Build filter for burning subtitles
     if subtitle_inputs:
-        def escape_ffmpeg_path(path: Path) -> str:
-            p_str = path.as_posix().replace(":", "\\:")
-            p_str = p_str.replace("'", "'\\\\\\''")
-            return p_str
+        # Scenario 1: Burning subtitles (if supported)
+        if has_subtitles:
+            # Add inputs to command line (only for burnable separate tracks, not combined)
+            burn_inputs = [x for x in subtitle_inputs if x[0] != "combined"]
+            for _, srt_path in burn_inputs:
+                cmd.extend(["-i", str(srt_path)])
 
-        filter_parts = []
-        current_label = "[0:v]"
-        total_subtitles = len(subtitle_inputs)
+            def escape_ffmpeg_path(path: Path) -> str:
+                p_str = path.as_posix().replace(":", "\\:")
+                p_str = p_str.replace("'", "'\\\\\\''")
+                return p_str
 
-        # Enhanced subtitle styling with high-quality readable fonts
-        # Style: Bold outline with semi-transparent background for optimal readability
-        # Commas in force_style must be escaped as \\, to prevent FFMPEG parsing them as filter parameters
-        german_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,SecondaryColour=&H000000&\\,OutlineColour=&H000000&\\,BackColour=&H00000000&\\,Bold=-1\\,Italic=0\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=8"  # Top center
-        english_style = "FontName=Arial\\,FontSize=22\\,PrimaryColour=&H00FFFF&\\,SecondaryColour=&H000000&\\,OutlineColour=&H000000&\\,BackColour=&H00000000&\\,Bold=-1\\,Italic=0\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=5"  # Middle center
-        arabic_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,SecondaryColour=&H000000&\\,OutlineColour=&H000000&\\,BackColour=&H00000000&\\,Bold=-1\\,Italic=0\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=2"  # Bottom left (RTL support)
+            filter_parts = []
+            current_label = "[0:v]"
+            total_subtitles = len(burn_inputs)
 
-        # German on top
-        if ("de", german_srt) in subtitle_inputs:
-            next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
-            filter_parts.append(
-                f"{current_label}subtitles=filename='{escape_ffmpeg_path(german_srt)}':force_style='{german_style}'{next_label}"
-            )
-            current_label = next_label
+            german_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,SecondaryColour=&H000000&\\,OutlineColour=&H000000&\\,BackColour=&H00000000&\\,Bold=-1\\,Italic=0\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=8"
+            english_style = "FontName=Arial\\,FontSize=22\\,PrimaryColour=&H00FFFF&\\,SecondaryColour=&H000000&\\,OutlineColour=&H000000&\\,BackColour=&H00000000&\\,Bold=-1\\,Italic=0\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=5"
+            arabic_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,SecondaryColour=&H000000&\\,OutlineColour=&H000000&\\,BackColour=&H00000000&\\,Bold=-1\\,Italic=0\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=2"
 
-        # English in middle
-        if ("en", english_srt) in subtitle_inputs:
-            next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
-            filter_parts.append(
-                f"{current_label}subtitles=filename='{escape_ffmpeg_path(english_srt)}':force_style='{english_style}'{next_label}"
-            )
-            current_label = next_label
+            if ("de", german_srt) in burn_inputs:
+                next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
+                filter_parts.append(
+                    f"{current_label}subtitles=filename='{escape_ffmpeg_path(german_srt)}':force_style='{german_style}'{next_label}"
+                )
+                current_label = next_label
 
-        # Arabic on bottom
-        if ("ar", arabic_srt) in subtitle_inputs:
-            next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
-            filter_parts.append(
-                f"{current_label}subtitles=filename='{escape_ffmpeg_path(arabic_srt)}':force_style='{arabic_style}'{next_label}"
-            )
-            current_label = next_label
+            if ("en", english_srt) in burn_inputs:
+                next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
+                filter_parts.append(
+                    f"{current_label}subtitles=filename='{escape_ffmpeg_path(english_srt)}':force_style='{english_style}'{next_label}"
+                )
+                current_label = next_label
 
-        cmd.extend(["-filter_complex", ";".join(filter_parts)])
-        cmd.extend(["-map", "[vout]"])
-        cmd.extend(["-map", "0:a?"])
+            if ("ar", arabic_srt) in burn_inputs:
+                next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
+                filter_parts.append(
+                    f"{current_label}subtitles=filename='{escape_ffmpeg_path(arabic_srt)}':force_style='{arabic_style}'{next_label}"
+                )
+                current_label = next_label
 
-    cmd.extend([
-        "-c:v", "libx264", "-preset", "slow", "-crf", "23", "-b:v", f"{video_bitrate}k",
-        "-c:a", "aac", "-b:a", f"{audio_bitrate}k",
-        "-movflags", "+faststart",
-        "-pix_fmt", "yuv420p",
-        str(output_path),
-    ])
+            cmd.extend(["-filter_complex", ";".join(filter_parts)])
+            cmd.extend(["-map", "[vout]"])
+            cmd.extend(["-map", "0:a?"])
+            cmd.extend([
+                "-c:v", "libx264", "-preset", "slow", "-crf", "23", "-b:v", f"{video_bitrate}k",
+                "-c:a", "aac", "-b:a", f"{audio_bitrate}k",
+                "-movflags", "+faststart",
+                "-pix_fmt", "yuv420p",
+                str(output_path),
+            ])
+        else:
+            # Scenario 2: Embedding soft subtitles (fallback for missing libass)
+            print("  [WARNING] Your FFmpeg lacks the 'subtitles' filter (compiled without libass).")
+            print("            Falling back to embedding soft subtitles inside the MP4 video...")
+            print("            (To burn hard subtitles, reinstall FFmpeg with libass: brew install ffmpeg)")
+            
+            for _, srt_path in subtitle_inputs:
+                cmd.extend(["-i", str(srt_path)])
+
+            cmd.extend(["-map", "0:v", "-map", "0:a?"])
+            for idx, _ in enumerate(subtitle_inputs):
+                cmd.extend(["-map", f"{idx+1}:s"])
+
+            cmd.extend([
+                "-c:v", "libx264", "-preset", "slow", "-crf", "23", "-b:v", f"{video_bitrate}k",
+                "-c:a", "aac", "-b:a", f"{audio_bitrate}k",
+                "-c:s", "mov_text",
+            ])
+            for idx, (lang, _) in enumerate(subtitle_inputs):
+                lang_map = {"de": "ger", "en": "eng", "ar": "ara", "combined": "mul"}
+                cmd.extend([f"-metadata:s:s:{idx}", f"language={lang_map.get(lang, lang)}"])
+                title_map = {"de": "German", "en": "English", "ar": "Arabic", "combined": "Tri-lingual (AR/DE/EN)"}
+                cmd.extend([f"-metadata:s:s:{idx}", f"title={title_map.get(lang, lang)}"])
+
+            cmd.extend([
+                "-movflags", "+faststart",
+                "-pix_fmt", "yuv420p",
+                str(output_path),
+            ])
+    else:
+        # Scenario 3: No subtitles at all
+        cmd.extend([
+            "-c:v", "libx264", "-preset", "slow", "-crf", "23", "-b:v", f"{video_bitrate}k",
+            "-c:a", "aac", "-b:a", f"{audio_bitrate}k",
+            "-movflags", "+faststart",
+            "-pix_fmt", "yuv420p",
+            str(output_path),
+        ])
 
     # Run with progress monitoring
     print("  Compressing video with progress bar...")
@@ -858,12 +914,16 @@ def parse_args():
         help="Whisper model size (e.g. medium, large-v3-turbo, large-v3-4bit) or HF repo (default: medium)",
     )
     parser.add_argument(
-        "--whisper-batch-size", type=int, default=8,
-        help="Batch size for MLX-Whisper parallel decoding (default: 8)",
+        "--whisper-temperature", type=float, default=None,
+        help="Temperature for Whisper decoding (e.g. 0.0 for greedy decoding, default: None/auto-fallback)",
     )
     parser.add_argument(
         "--condition-on-previous", action="store_true",
         help="Condition Whisper transcription on previous text (default: False, can increase loops but sometimes helps consistency)",
+    )
+    parser.add_argument(
+        "--skip-double-check", action="store_true",
+        help="Skip the Arabic transcription double-checking step when resuming",
     )
     parser.add_argument(
         "--target-size", type=int, default=50,
@@ -961,13 +1021,13 @@ def main():
         segments = read_srt(arabic_srt)
         print(f"       {len(segments)} segments loaded")
 
-        # Double-check Arabic transcription always
-        if audio_path and audio_path.exists():
+        # Double-check Arabic transcription
+        if audio_path and audio_path.exists() and not args.skip_double_check:
             print(f"\n  Double-checking Arabic transcription...")
             double_check_segments = double_check_arabic_srt(
                 segments, audio_path, args.model,
-                batch_size=args.whisper_batch_size,
                 condition_on_prev=args.condition_on_previous,
+                temperature=args.whisper_temperature,
             )
             print(f"  Double-check completed: {len(double_check_segments)} segments")
             # Use the double-checked segments
@@ -978,8 +1038,8 @@ def main():
         print(f"\n[2/6] Transcribing Arabic (model: {args.model})...")
         segments = transcribe_arabic(
             audio_path, args.model,
-            batch_size=args.whisper_batch_size,
             condition_on_prev=args.condition_on_previous,
+            temperature=args.whisper_temperature,
         )
         write_srt(segments, arabic_srt)
         print(f"       Arabic SRT: {arabic_srt.name} ({len(segments)} segments)")

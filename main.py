@@ -201,26 +201,32 @@ def download_youtube(url: str, output_dir: Path, min_quality: bool = False) -> d
 
 # ─── Transcription ─────────────────────────────────────────────────
 
-def transcribe_arabic(audio_path: Path, model_name: str) -> list:
+def transcribe_arabic(audio_path: Path, model_name: str, batch_size: int = 8, condition_on_prev: bool = False) -> list:
     """Transcribe Arabic audio using MLX-Whisper on Apple Silicon GPU."""
     print(f"  Transcribing Arabic audio with MLX-Whisper ({model_name})...")
+    hf_repo = model_name if "/" in model_name else f"mlx-community/whisper-{model_name}"
     result = mlx_whisper.transcribe(
         str(audio_path),
-        path_or_hf_repo=f"mlx-community/whisper-{model_name}",
+        path_or_hf_repo=hf_repo,
         language="ar",
         verbose=False,
+        batch_size=batch_size,
+        condition_on_previous_text=condition_on_prev,
     )
     return cast(list, result["segments"])
 
 
-def double_check_arabic_srt(segments: list, audio_path: Path, model_name: str) -> list:
+def double_check_arabic_srt(segments: list, audio_path: Path, model_name: str, batch_size: int = 8, condition_on_prev: bool = False) -> list:
     """Re-transcribe Arabic audio to double-check the SRT."""
     print(f"  Double-checking Arabic transcription with MLX-Whisper ({model_name})...")
+    hf_repo = model_name if "/" in model_name else f"mlx-community/whisper-{model_name}"
     result = mlx_whisper.transcribe(
         str(audio_path),
-        path_or_hf_repo=f"mlx-community/whisper-{model_name}",
+        path_or_hf_repo=hf_repo,
         language="ar",
         verbose=False,
+        batch_size=batch_size,
+        condition_on_previous_text=condition_on_prev,
     )
     return cast(list, result["segments"])
 
@@ -849,8 +855,15 @@ def parse_args():
     parser.add_argument("url", type=str, help="YouTube video URL")
     parser.add_argument(
         "--model", type=str, default="medium",
-        choices=["tiny", "base", "small", "medium", "large-v2", "large-v3"],
-        help="Whisper model size (default: medium)",
+        help="Whisper model size (e.g. medium, large-v3-turbo, large-v3-4bit) or HF repo (default: medium)",
+    )
+    parser.add_argument(
+        "--whisper-batch-size", type=int, default=8,
+        help="Batch size for MLX-Whisper parallel decoding (default: 8)",
+    )
+    parser.add_argument(
+        "--condition-on-previous", action="store_true",
+        help="Condition Whisper transcription on previous text (default: False, can increase loops but sometimes helps consistency)",
     )
     parser.add_argument(
         "--target-size", type=int, default=50,
@@ -951,7 +964,11 @@ def main():
         # Double-check Arabic transcription always
         if audio_path and audio_path.exists():
             print(f"\n  Double-checking Arabic transcription...")
-            double_check_segments = double_check_arabic_srt(segments, audio_path, args.model)
+            double_check_segments = double_check_arabic_srt(
+                segments, audio_path, args.model,
+                batch_size=args.whisper_batch_size,
+                condition_on_prev=args.condition_on_previous,
+            )
             print(f"  Double-check completed: {len(double_check_segments)} segments")
             # Use the double-checked segments
             segments = double_check_segments
@@ -959,7 +976,11 @@ def main():
             print(f"  Updated Arabic SRT: {arabic_srt.name}")
     else:
         print(f"\n[2/6] Transcribing Arabic (model: {args.model})...")
-        segments = transcribe_arabic(audio_path, args.model)
+        segments = transcribe_arabic(
+            audio_path, args.model,
+            batch_size=args.whisper_batch_size,
+            condition_on_prev=args.condition_on_previous,
+        )
         write_srt(segments, arabic_srt)
         print(f"       Arabic SRT: {arabic_srt.name} ({len(segments)} segments)")
 

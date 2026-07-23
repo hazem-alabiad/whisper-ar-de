@@ -50,6 +50,12 @@ from dotenv import load_dotenv
 
 import mlx_whisper
 
+# Local translation backend
+try:
+    from local_translation import translate_with_local
+except ImportError:
+    translate_with_local = None
+
 # ─── Language Detection ───────────────────────────────────────────
 
 def is_arabic(text: str) -> bool:
@@ -337,20 +343,31 @@ def translate_with_mymemory(text: str, source: str, target: str) -> str:
 
 
 def get_translation_backend(args) -> tuple:
-    """Return the best available translation backend and its name."""
+    """Return the best available translation backend based on arguments.
+    Returns a tuple (backend_name, key) where backend_name is one of
+    'google', 'mymemory', 'deepl', or 'local'.
+    """
+    if getattr(args, 'local_translate', False):
+        return ("local", "")
+    # DeepL currently disabled; fallback to Google
     return ("google", "")
+
 
 
 def translate_segment(text: str, source: str, target: str, backend: str, deepl_key: str) -> str:
     """Translate a single segment using the specified backend."""
     try:
+        if backend == "local":
+            if translate_with_local is None:
+                raise ImportError("Please install transformers and sentencepiece: pip install transformers sentencepiece")
+            return translate_with_local(text, source, target)
         if backend == "deepl" and deepl_key:
             return translate_with_deepl(text, source, target, deepl_key)
         else:
             return translate_with_google(text, source, target)
     except Exception as e:
         print(f"  [WARNING] Translation backend '{backend}' failed: {e}")
-        print(f"  Falling back to Google Translate...")
+        print("  Falling back to Google Translate...")
         try:
             return translate_with_google(text, source, target)
         except Exception as e2:
@@ -438,18 +455,16 @@ def translate_segments(segments: list, output_dir: Path | None, args, deepl_key:
                     batch[v_idx]["text_de"] = de_results[idx]
                     batch[v_idx]["text_en"] = en_results[idx]
             except Exception as e:
-                print(f"  [WARNING] DeepL batch translation failed: {e}. Falling back to Google Translate segment-by-segment...")
-                # Fallback to Google
+                print(f"  [WARNING] DeepL batch translation failed: {e}. Falling back to single segment translation...")
                 for i, seg in enumerate(batch):
                     if seg['text'].strip():
-                        seg["text_de"] = translate_with_google(seg['text'].strip(), "ar", "de")
-                        seg["text_en"] = translate_with_google(seg['text'].strip(), "ar", "en")
+                        seg["text_de"] = translate_segment(seg['text'].strip(), "ar", "de", backend, deepl_key)
+                        seg["text_en"] = translate_segment(seg['text'].strip(), "ar", "en", backend, deepl_key)
         else:
-            # Fallback: translate each segment individually with Google
             for i, seg in enumerate(batch):
                 if seg['text'].strip():
-                    seg["text_de"] = translate_with_google(seg['text'].strip(), "ar", "de")
-                    seg["text_en"] = translate_with_google(seg['text'].strip(), "ar", "en")
+                    seg["text_de"] = translate_segment(seg['text'].strip(), "ar", "de", backend, deepl_key)
+                    seg["text_en"] = translate_segment(seg['text'].strip(), "ar", "en", backend, deepl_key)
 
         # Mark as translated
         for i in range(batch_start, batch_end):
@@ -458,6 +473,7 @@ def translate_segments(segments: list, output_dir: Path | None, args, deepl_key:
         save_live_backup(batch_end)
 
         return batch_end
+
 
     # Process batches in parallel
     print(f"  Translating {total} segments Arabic → German + English ({backend} - standard mode) ...")
@@ -530,14 +546,19 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
             print(f"  [WARNING] Could not read ytemp.json: {e}. Starting verification from scratch.")
             start_idx = 0
             
-    if start_idx < total:
-        print(f"\n  Verifying translations with multiple AI tools...")
+    # Setup verify_count limit
+    verify_count = getattr(args, "verify_count", 20)
+    if verify_count < 0 or verify_count > total:
+        verify_count = total
+
+    if start_idx < verify_count:
+        print(f"\n  Verifying translations with multiple AI tools (up to {verify_count} segments)...")
         print(f"  Pass 1: Google Translate (free)")
         if deepl_key:
             print(f"  Pass 2: DeepL API")
         print(f"  Pass 3: MyMemory Translate (free)")
 
-    for idx in range(start_idx + 1, total + 1):
+    for idx in range(start_idx + 1, verify_count + 1):
         seg = segments[idx - 1]
         original_text = seg.get("original_ar", "")
         if not original_text.strip():
@@ -603,6 +624,9 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
                 json.dump({"completed_count": idx, "report": report}, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
+
+        # Rate-limiting delay to avoid exceeding API limits (e.g. 5 requests/sec)
+        time.sleep(0.5)
 
     # Save final report
     report_dir = output_dir / "reports"
@@ -721,35 +745,45 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
 
     # Build filter for burning subtitles
     if subtitle_inputs:
+        def escape_ffmpeg_path(path: Path) -> str:
+            p_str = path.as_posix().replace(":", "\\:")
+            p_str = p_str.replace("'", "'\\\\\\''")
+            return p_str
+
         filter_parts = []
         current_label = "[0:v]"
+        total_subtitles = len(subtitle_inputs)
 
         # Enhanced subtitle styling with high-quality readable fonts
         # Style: Bold outline with semi-transparent background for optimal readability
-        german_style = "FontName=Arial,FontSize=26,PrimaryColour=&HFFFFFF&,SecondaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=-1,Italic=0,BorderStyle=1,Outline=3,Shadow=1,MarginV=20,Alignment=8"  # Top center
-        english_style = "FontName=Arial,FontSize=22,PrimaryColour=&H00FFFF&,SecondaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=-1,Italic=0,BorderStyle=1,Outline=3,Shadow=1,MarginV=20,Alignment=5"  # Middle center
-        arabic_style = "FontName=Arial,FontSize=26,PrimaryColour=&HFFFFFF&,SecondaryColour=&H000000&,OutlineColour=&H000000&,BackColour=&H00000000&,Bold=-1,Italic=0,BorderStyle=1,Outline=3,Shadow=1,MarginV=20,Alignment=2"  # Bottom left (RTL support)
+        # Commas in force_style must be escaped as \\, to prevent FFMPEG parsing them as filter parameters
+        german_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,SecondaryColour=&H000000&\\,OutlineColour=&H000000&\\,BackColour=&H00000000&\\,Bold=-1\\,Italic=0\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=8"  # Top center
+        english_style = "FontName=Arial\\,FontSize=22\\,PrimaryColour=&H00FFFF&\\,SecondaryColour=&H000000&\\,OutlineColour=&H000000&\\,BackColour=&H00000000&\\,Bold=-1\\,Italic=0\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=5"  # Middle center
+        arabic_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,SecondaryColour=&H000000&\\,OutlineColour=&H000000&\\,BackColour=&H00000000&\\,Bold=-1\\,Italic=0\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=2"  # Bottom left (RTL support)
 
         # German on top
         if ("de", german_srt) in subtitle_inputs:
-            de_idx = subtitle_inputs.index(("de", german_srt)) + 1
+            next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
             filter_parts.append(
-                f"{current_label}subtitles={str(german_srt)}:force_style='{german_style}'[v{len(filter_parts)+1}]"
+                f"{current_label}subtitles=filename='{escape_ffmpeg_path(german_srt)}':force_style='{german_style}'{next_label}"
             )
-            current_label = f"[v{len(filter_parts)+1}]"
+            current_label = next_label
 
         # English in middle
         if ("en", english_srt) in subtitle_inputs:
+            next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
             filter_parts.append(
-                f"{current_label}subtitles={str(english_srt)}:force_style='{english_style}'[v{len(filter_parts)+1}]"
+                f"{current_label}subtitles=filename='{escape_ffmpeg_path(english_srt)}':force_style='{english_style}'{next_label}"
             )
-            current_label = f"[v{len(filter_parts)+1}]"
+            current_label = next_label
 
         # Arabic on bottom
         if ("ar", arabic_srt) in subtitle_inputs:
+            next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
             filter_parts.append(
-                f"{current_label}subtitles={str(arabic_srt)}:force_style='{arabic_style}'[vout]"
+                f"{current_label}subtitles=filename='{escape_ffmpeg_path(arabic_srt)}':force_style='{arabic_style}'{next_label}"
             )
+            current_label = next_label
 
         cmd.extend(["-filter_complex", ";".join(filter_parts)])
         cmd.extend(["-map", "[vout]"])
@@ -766,6 +800,7 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
     # Run with progress monitoring
     print("  Compressing video with progress bar...")
     last_update = 0.0
+    ffmpeg_output = []
 
     process = subprocess.Popen(
         cmd,
@@ -778,6 +813,7 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
     try:
         if process.stdout:
             for line in process.stdout:
+                ffmpeg_output.append(line)
                 time_match = re.search(r"time=(\d+):(\d+):(\d+\.\d+)", line)
                 if time_match:
                     hours, mins, secs = time_match.groups()
@@ -794,6 +830,11 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
     finally:
         process.wait()
     print()
+
+    if process.returncode != 0:
+        print("  [ERROR] FFMPEG failed with the following output:")
+        print("".join(ffmpeg_output))
+        raise RuntimeError(f"FFMPEG failed with exit code {process.returncode}")
 
     final_mb = output_path.stat().st_size / (1024 * 1024)
     print(f"  Compressed video size: {final_mb:.1f} MB")
@@ -826,6 +867,15 @@ def parse_args():
     parser.add_argument(
         "--deepl-key", type=str,
         help="DeepL API key for translation/verification",
+    )
+    parser.add_argument(
+        "--local-translate",
+        action="store_true",
+        help="Use local LLM translation backend instead of online services",
+    )
+    parser.add_argument(
+        "--verify-count", type=int, default=20,
+        help="Number of segments to verify during translation verification (default: 20, use -1 for all)",
     )
     parser.add_argument(
         "--no-cleanup", action="store_true",

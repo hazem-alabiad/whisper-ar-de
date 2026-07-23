@@ -562,18 +562,12 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
         except Exception:
             pass
 
-        # Progress bar
-        pct = idx * 100 // total
-        print(f"\r  Verification progress: {pct}% ({idx}/{total})", end="", flush=True)
-
         # Save live backup to ytemp.json
         try:
             with open(ytemp_path, "w", encoding="utf-8") as f:
                 json.dump({"completed_count": idx, "report": report}, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
-
-    print()  # New line after progress
 
     # Save final report
     report_dir = output_dir / "reports"

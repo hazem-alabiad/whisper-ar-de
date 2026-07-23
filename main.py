@@ -281,14 +281,37 @@ def translate_with_deepl(text: str, source: str, target: str, api_key: str) -> s
 
 
 def translate_with_google(text: str, source: str, target: str) -> str:
-    """Translate text using Google Translate (free)."""
+    """Translate text using Google Translate (free) with retries and MyMemory fallback."""
+    import time
+    import random
+    
+    max_retries = 5
+    backoff = 1.0
+    
+    for attempt in range(max_retries):
+        try:
+            translator = GoogleTranslator(source=source, target=target)
+            result = translator.translate(text)
+            if result and result.strip():
+                return result if isinstance(result, str) else str(result)
+        except Exception as e:
+            if attempt == max_retries - 1:
+                break
+            
+            # Sleep with some jitter
+            sleep_time = backoff + random.uniform(0.1, 0.5)
+            time.sleep(sleep_time)
+            backoff *= 2.0
+            
+    # Fallback to MyMemory Translate if Google Translate failed completely
     try:
-        translator = GoogleTranslator(source=source, target=target)
-        result = translator.translate(text)
-        return result if isinstance(result, str) else str(result)
-    except Exception as e:
-        print(f"  [WARNING] Google Translate failed: {e}")
-        return text
+        mymemory_res = translate_with_mymemory(text, source, target)
+        if mymemory_res and mymemory_res.strip() != text.strip():
+            return mymemory_res
+    except Exception:
+        pass
+        
+    return text
 
 
 def translate_with_mymemory(text: str, source: str, target: str) -> str:
@@ -361,7 +384,7 @@ def translate_segments(segments: list, output_dir: Path | None, args, deepl_key:
 
     total = len(segments)
     batch_size = 20
-    max_workers = 10
+    max_workers = 3
 
     # Resume support
     translated_indices = set()

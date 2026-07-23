@@ -179,23 +179,32 @@ def download_youtube(url: str, output_dir: Path, min_quality: bool = False) -> d
         check=True, capture_output=True, text=True,
     )
 
-    audio_template = output_dir / "%(id)s.%(ext)s"
-    subprocess.run(
-        ["yt-dlp", "-x", "--audio-format", "mp3", "-o", str(audio_template), url],
-        check=True, capture_output=True, text=True,
-    )
+    # Try to extract audio as MP3; if conversion fails (e.g., missing ffmpeg), fall back to raw m4a download
+    audio_path = None
+    audio_template_mp3 = output_dir / "%(id)s.%(ext)s"
+    try:
+        subprocess.run(
+            ["yt-dlp", "-x", "--audio-format", "mp3", "-o", str(audio_template_mp3), url],
+            check=True, capture_output=True, text=True,
+        )
+        audio_path = audio_template_mp3
+    except subprocess.CalledProcessError as e:
+        print("[WARNING] MP3 audio extraction failed, falling back to m4a audio download.")
+        audio_template_m4a = output_dir / "%(id)s_audio.m4a"
+        subprocess.run(
+            ["yt-dlp", "-f", "bestaudio[ext=m4a]/bestaudio", "-o", str(audio_template_m4a), url],
+            check=True, capture_output=True, text=True,
+        )
+        audio_path = audio_template_m4a
 
     mp4_files = sorted(output_dir.glob("*_video.mp4"))
-    mp3_files = sorted(output_dir.glob("*.mp3"))
-
-    if not mp4_files or not mp3_files:
-        raise RuntimeError("Failed to download video or audio.")
-
+    if not mp4_files:
+        raise RuntimeError("Failed to download video.")
     video_id = mp4_files[0].stem.replace("_video", "")
     return {
         "video_id": video_id,
         "video": mp4_files[0],
-        "audio": mp3_files[0],
+        "audio": audio_path,
     }
 
 
@@ -904,26 +913,32 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
 
 # ─── Argument Parsing ─────────────────────────────────────────────
 
+def parse_temperature(val):
+    if val is None or val.lower() == "none":
+        return None
+    return float(val)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="YouTube Arabic → German → English: SRT subtitles + compressed video."
     )
     parser.add_argument("url", type=str, help="YouTube video URL")
     parser.add_argument(
-        "--model", type=str, default="medium",
-        help="Whisper model size (e.g. medium, large-v3-turbo, large-v3-4bit) or HF repo (default: medium)",
+        "--model", type=str, default="large-v3-turbo-q4",
+        help="Whisper model size (e.g. large-v3-turbo-q4, medium, large-v3-turbo, large-v3-4bit) or HF repo (default: large-v3-turbo-q4)",
     )
     parser.add_argument(
-        "--whisper-temperature", type=float, default=None,
-        help="Temperature for Whisper decoding (e.g. 0.0 for greedy decoding, default: None/auto-fallback)",
+        "--whisper-temperature", type=parse_temperature, default=0.0,
+        help="Temperature for Whisper decoding (e.g. 0.0 for greedy decoding, 'none' for auto-fallback) (default: 0.0)",
     )
     parser.add_argument(
         "--condition-on-previous", action="store_true",
         help="Condition Whisper transcription on previous text (default: False, can increase loops but sometimes helps consistency)",
     )
     parser.add_argument(
-        "--skip-double-check", action="store_true",
-        help="Skip the Arabic transcription double-checking step when resuming",
+        "--double-check", action="store_true",
+        help="Re-transcribe and double-check Arabic transcription when resuming (default: False)",
     )
     parser.add_argument(
         "--target-size", type=int, default=50,
@@ -951,8 +966,9 @@ def parse_args():
         help="Number of segments to verify during translation verification (default: 20, use -1 for all)",
     )
     parser.add_argument(
-        "--no-cleanup", action="store_true",
-        help="Skip cleanup of temporary files after completion",
+        "--skip-download",
+        action="store_true",
+        help="Skip downloading video/audio if compressed video already exists with same base name",
     )
     return parser.parse_args()
 
@@ -962,7 +978,28 @@ def parse_args():
 def main():
     load_dotenv()
     args = parse_args()
+    # Enforce maximum target size of 100 MB
+    if args.target_size > 100:
+        print(f"[WARNING] Target size capped at 100 MB (requested {args.target_size} MB)")
+        args.target_size = 100
     output_dir = Path(args.output_dir)
+    # Determine base name early to locate compressed file
+    base_name = None
+    # If we have an existing compressed video, infer base name from it
+    for f in output_dir.glob("*_compressed.mp4"):
+        base_name = f.stem.replace("_compressed", "")
+        break
+    if args.skip_download and base_name:
+        compressed_video = output_dir / f"{base_name}_compressed.mp4"
+        if compressed_video.exists():
+            existing_size_mb = compressed_video.stat().st_size / (1024 * 1024)
+            if existing_size_mb <= args.target_size:
+                print(f"[INFO] Skipping download/processing because compressed video already exists ({existing_size_mb:.1f} MB) and is within target size.")
+                print(f"   File: {compressed_video.name}")
+                # Exit gracefully – nothing else to do
+                import sys
+                sys.exit(0)
+    # If not skipping, continue normal pipeline (base_name will be set later)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'='*60}")
@@ -1022,7 +1059,7 @@ def main():
         print(f"       {len(segments)} segments loaded")
 
         # Double-check Arabic transcription
-        if audio_path and audio_path.exists() and not args.skip_double_check:
+        if audio_path and audio_path.exists() and args.double_check:
             print(f"\n  Double-checking Arabic transcription...")
             double_check_segments = double_check_arabic_srt(
                 segments, audio_path, args.model,
@@ -1125,7 +1162,13 @@ def main():
 
     # Step 4: Compress video (skip if exists)
     if compressed_video.exists():
-        print(f"\n[4/6] Compressed video already exists: {compressed_video.name}")
+        existing_size_mb = compressed_video.stat().st_size / (1024 * 1024)
+        if existing_size_mb <= args.target_size:
+            print(f"\n[4/6] Compressed video already exists and is within target size ({existing_size_mb:.1f} MB): {compressed_video.name}")
+        else:
+            print(f"\n[4/6] Existing compressed video ({existing_size_mb:.1f} MB) exceeds target size ({args.target_size} MB). Re-compressing...")
+            compress_video(video_path, compressed_video, args.target_size,
+                           arabic_srt, german_srt, english_srt, combined_srt)
     else:
         print(f"\n[4/6] Compressing video (target: {args.target_size} MB)...")
         compress_video(video_path, compressed_video, args.target_size,

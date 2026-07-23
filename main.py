@@ -7,15 +7,13 @@ translates to German and English SRT (verified with multiple AI tools),
 and compresses the video to ~50 MB with burned subtitles.
 
 Translation backends (in priority order):
-  1. OpenAI GPT-4 (best quality, requires OPENAI_API_KEY)
-  2. OpenRouter (requires OPENROUTER_API_KEY)
-  3. DeepSeek (requires DEEPSEEK_API_KEY)
-  4. Google Translate (free fallback, no key needed)
+  1. DeepL API (requires DEEPL_API_KEY)
+  2. Google Translate (free fallback, no key needed)
 
 Multi-pass verification:
   - Pass 1: Google Translate (free)
-  - Pass 2: OpenAI GPT-4 (if available)
-  - Pass 3: OpenRouter (if available)
+  - Pass 2: DeepL API (if available)
+  - Pass 3: MyMemory Translate (free)
 
 Uses MLX-Whisper for fast transcription on Apple Silicon GPU.
 Resume support: re-run the same command and it detects existing
@@ -31,9 +29,7 @@ Flags:
     --min-quality       Download minimum quality video/audio
     --cleanup           Clean up temp files after completion
     --force-retranslate Force re-translation even if German SRT exists
-    --triple-check      Use 3 AI tools to verify translations
-    --openrouter-key    OpenRouter API key for translation/verification
-    --deepseek-key      DeepSeek API key for translation/verification
+    --deepl-key         DeepL API key for translation/verification
 """
 
 import argparse
@@ -271,52 +267,6 @@ def translate_with_deepl(text: str, source: str, target: str, api_key: str) -> s
         return text
 
 
-def translate_with_openrouter(text: str, source: str, target: str, api_key: str) -> str:
-    """Translate text using OpenRouter."""
-    response = requests.post(
-        url="https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": "google/gemini-2.0-flash-001",
-            "messages": [
-                {"role": "system", "content": f"You are a professional translator. Translate from {source} to {target}. Return only the translation, no extra text."},
-                {"role": "user", "content": text},
-            ],
-            "temperature": 0.3,
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return data["choices"][0]["message"]["content"].strip()
-
-
-def translate_with_deepseek(text: str, source: str, target: str, api_key: str) -> str:
-    """Translate text using DeepSeek."""
-    response = requests.post(
-        url="https://api.deepseek.com/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": "deepseek-chat",
-            "messages": [
-                {"role": "system", "content": f"You are a professional translator. Translate from {source} to {target}. Return only the translation, no extra text."},
-                {"role": "user", "content": text},
-            ],
-            "temperature": 0.3,
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return data["choices"][0]["message"]["content"].strip()
-
-
 def translate_with_google(text: str, source: str, target: str) -> str:
     """Translate text using Google Translate (free)."""
     translator = GoogleTranslator(source=source, target=target)
@@ -324,27 +274,43 @@ def translate_with_google(text: str, source: str, target: str) -> str:
     return result if isinstance(result, str) else str(result)
 
 
+def translate_with_mymemory(text: str, source: str, target: str) -> str:
+    """Translate text using MyMemory Translate (free)."""
+    from deep_translator import MyMemoryTranslator
+    
+    # Map 2-letter codes to full names that MyMemoryTranslator supports
+    lang_map = {
+        "ar": "arabic",
+        "de": "german",
+        "en": "english"
+    }
+    src_mapped = lang_map.get(source.lower(), source.lower())
+    tgt_mapped = lang_map.get(target.lower(), target.lower())
+    
+    try:
+        translator = MyMemoryTranslator(source=src_mapped, target=tgt_mapped)
+        result = translator.translate(text)
+        return result if isinstance(result, str) else str(result)
+    except Exception as e:
+        print(f"  [WARNING] MyMemory translation failed: {e}")
+        return text
+
+
 def get_translation_backend(args) -> tuple:
     """Return the best available translation backend and its name."""
     deepl_key = getattr(args, "deepl_key", None) or os.getenv("DEEPL_API_KEY", "").strip()
-    openrouter_key = getattr(args, "openrouter_key", None) or os.getenv("OPENROUTER_API_KEY", "").strip()
-    deepseek_key = getattr(args, "deepseek_key", None) or os.getenv("DEEPSEEK_API_KEY", "").strip()
 
     # If DeepL key is available, use it as the primary backend!
     if deepl_key:
-        return ("deepl", deepl_key, openrouter_key, deepseek_key)
-    return ("google", "", openrouter_key, deepseek_key)
+        return ("deepl", deepl_key)
+    return ("google", "")
 
 
-def translate_segment(text: str, source: str, target: str, backend: str, deepl_key: str, openrouter_key: str, deepseek_key: str) -> str:
+def translate_segment(text: str, source: str, target: str, backend: str, deepl_key: str) -> str:
     """Translate a single segment using the specified backend."""
     try:
         if backend == "deepl" and deepl_key:
             return translate_with_deepl(text, source, target, deepl_key)
-        elif backend == "openrouter" and openrouter_key:
-            return translate_with_openrouter(text, source, target, openrouter_key)
-        elif backend == "deepseek" and deepseek_key:
-            return translate_with_deepseek(text, source, target, deepseek_key)
         else:
             return translate_with_google(text, source, target)
     except Exception as e:
@@ -373,7 +339,7 @@ def translate_segments(segments: list, output_dir: Path | None, args, deepl_key:
 
     Supports resume capability and live backup.
     """
-    backend, deepl_key, openrouter_key, deepseek_key = get_translation_backend(args)
+    backend, deepl_key = get_translation_backend(args)
     args._backend = backend
 
     # Store original Arabic text before translation
@@ -492,22 +458,16 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
 
     Pass 1: Google Translate (free)
     Pass 2: DeepL API (if available)
-    Pass 3: OpenRouter (if available)
+    Pass 3: MyMemory Translate (free)
     """
-    openrouter_key = getattr(args, "openrouter_key", None) or os.getenv("OPENROUTER_API_KEY", "").strip()
-    deepseek_key = getattr(args, "deepseek_key", None) or os.getenv("DEEPSEEK_API_KEY", "").strip()
     deepl_key = deepl_key or getattr(args, "deepl_key", None) or os.getenv("DEEPL_API_KEY", "").strip()
 
-    print(f"\n  Verifying translations with multiple AI tools...")
-    print(f"  Pass 1: Google Translate (free)")
-    if deepl_key:
-        print(f"  Pass 2: DeepL API")
-    if openrouter_key:
-        print(f"  Pass 3: OpenRouter")
-    if deepseek_key:
-        print(f"  Pass 4: DeepSeek")
-
     total = len(segments)
+    
+    # Setup ytemp.json path
+    ytemp_path = output_dir / "ytemp.json"
+    
+    # Initialize report
     report = {
         "timestamp": datetime.now().isoformat(),
         "total_segments": total,
@@ -515,21 +475,43 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
         "google_mismatches": 0,
         "deepl_verified": 0,
         "deepl_mismatches": 0,
-        "openrouter_verified": 0,
-        "openrouter_mismatches": 0,
-        "deepseek_verified": 0,
-        "deepseek_mismatches": 0,
+        "mymemory_verified": 0,
+        "mymemory_mismatches": 0,
         "mismatches": [],
     }
+    
+    start_idx = 0
+    
+    # Resume support
+    if ytemp_path.exists():
+        try:
+            with open(ytemp_path, "r", encoding="utf-8") as f:
+                saved_data = json.load(f)
+                if saved_data and "report" in saved_data:
+                    report = saved_data["report"]
+                    start_idx = saved_data.get("completed_count", 0)
+                    print(f"  Resuming translation verification: {start_idx}/{total} segments already verified")
+        except Exception as e:
+            print(f"  [WARNING] Could not read ytemp.json: {e}. Starting verification from scratch.")
+            start_idx = 0
+            
+    if start_idx < total:
+        print(f"\n  Verifying translations with multiple AI tools...")
+        print(f"  Pass 1: Google Translate (free)")
+        if deepl_key:
+            print(f"  Pass 2: DeepL API")
+        print(f"  Pass 3: MyMemory Translate (free)")
 
-    # Live backup during verification
-    report_dir = output_dir / "reports"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    live_report = report_dir / "verification_live.json"
-
-    for idx, seg in enumerate(segments, 1):
+    for idx in range(start_idx + 1, total + 1):
+        seg = segments[idx - 1]
         original_text = seg.get("original_ar", "")
         if not original_text.strip():
+            # Update progress
+            try:
+                with open(ytemp_path, "w", encoding="utf-8") as f:
+                    json.dump({"completed_count": idx, "report": report}, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
             continue
 
         current_de = seg.get("text_de", seg.get("text", "")).strip()
@@ -556,8 +538,8 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
                     "google_en": google_en[:100],
                     "google_match": de_match_google,
                 })
-        except Exception as e:
-            print(f"  [VERIFY] Segment {idx}: Google error - {e}")
+        except Exception:
+            pass
 
         # Pass 2: DeepL API
         if deepl_key:
@@ -567,58 +549,48 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
                     report["deepl_verified"] += 1
                 else:
                     report["deepl_mismatches"] += 1
-            except Exception as e:
-                print(f"  [VERIFY] Segment {idx}: DeepL error - {e}")
-
-        # Pass 3: OpenRouter
-        if openrouter_key:
-            try:
-                openrouter_de = translate_with_openrouter(original_text, "ar", "de", openrouter_key)
-                if openrouter_de.strip() == current_de:
-                    report["openrouter_verified"] += 1
-                else:
-                    report["openrouter_mismatches"] += 1
-            except Exception as e:
-                print(f"  [VERIFY] Segment {idx}: OpenRouter error - {e}")
-
-        # Pass 4: DeepSeek
-        if deepseek_key:
-            try:
-                deepseek_de = translate_with_deepseek(original_text, "ar", "de", deepseek_key)
-                if deepseek_de.strip() == current_de:
-                    report["deepseek_verified"] += 1
-                else:
-                    report["deepseek_mismatches"] += 1
-            except Exception as e:
-                print(f"  [VERIFY] Segment {idx}: DeepSeek error - {e}")
-
-        # Progress bar
-        if idx % 10 == 0 or idx == total:
-            pct = idx * 100 // total
-            print(f"\r  Verification progress: {pct}% ({idx}/{total})", end="", flush=True)
-
-            # Save live backup
-            try:
-                with open(live_report, "w", encoding="utf-8") as f:
-                    json.dump(report, f, ensure_ascii=False, indent=2)
             except Exception:
                 pass
+
+        # Pass 3: MyMemory Translate
+        try:
+            mymemory_de = translate_with_mymemory(original_text, "ar", "de")
+            if mymemory_de.strip() == current_de:
+                report["mymemory_verified"] += 1
+            else:
+                report["mymemory_mismatches"] += 1
+        except Exception:
+            pass
+
+        # Progress bar
+        pct = idx * 100 // total
+        print(f"\r  Verification progress: {pct}% ({idx}/{total})", end="", flush=True)
+
+        # Save live backup to ytemp.json
+        try:
+            with open(ytemp_path, "w", encoding="utf-8") as f:
+                json.dump({"completed_count": idx, "report": report}, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     print()  # New line after progress
 
     # Save final report
+    report_dir = output_dir / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"verification_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
+    try:
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
     print(f"  Google verification: {report['google_verified']} verified, {report['google_mismatches']} mismatches")
     if deepl_key:
         print(f"  DeepL verification: {report['deepl_verified']} verified, {report['deepl_mismatches']} mismatches")
-    if openrouter_key:
-        print(f"  OpenRouter verification: {report['openrouter_verified']} verified, {report['openrouter_mismatches']} mismatches")
-    if deepseek_key:
-        print(f"  DeepSeek verification: {report['deepseek_verified']} verified, {report['deepseek_mismatches']} mismatches")
-    print(f"  Report saved to: {report_path}")
+    print(f"  MyMemory verification: {report['mymemory_verified']} verified, {report['mymemory_mismatches']} mismatches")
+    if start_idx < total:
+        print(f"  Report saved to: {report_path}")
 
     return report
 
@@ -629,6 +601,7 @@ def cleanup_temp_files(output_dir: Path, base_name: str) -> None:
         output_dir / "translation_progress.json",
         output_dir / "translation_temp.srt",
         output_dir / "reports" / "verification_live.json",
+        output_dir / "ytemp.json",
         output_dir / f"{base_name}_ar.srt",
         output_dir / f"{base_name}_de.srt",
         output_dir / f"{base_name}_en.srt",
@@ -644,15 +617,20 @@ def cleanup_temp_files(output_dir: Path, base_name: str) -> None:
             try:
                 temp_file.unlink()
                 print(f"  Cleaned up: {temp_file.name}")
-            except Exception as e:
+            except Exception:
                 pass
 
-    # Try to delete reports directory if it is empty
+    # Thoroughly delete the reports directory and its contents
     reports_dir = output_dir / "reports"
-    if reports_dir.exists() and not any(reports_dir.iterdir()):
+    if reports_dir.exists():
+        for f in reports_dir.glob("*"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
         try:
             reports_dir.rmdir()
-            print("  Cleaned up: empty reports directory")
+            print("  Cleaned up: reports directory")
         except Exception:
             pass
 
@@ -934,12 +912,12 @@ def main():
         print(f"       {len(segments)} segments loaded")
 
         # Verify with multiple AI tools
-        backend, deepl_key, openrouter_key, deepseek_key = get_translation_backend(args)
+        backend, deepl_key = get_translation_backend(args)
         args._backend = backend
         verify_translations_with_report(segments, output_dir, args, deepl_key)
     else:
         print(f"\n[3/6] Translating to German + English...")
-        backend, deepl_key, openrouter_key, deepseek_key = get_translation_backend(args)
+        backend, deepl_key = get_translation_backend(args)
         args._backend = backend
 
         if needs_retranslate:

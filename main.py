@@ -222,7 +222,8 @@ def double_check_arabic_srt(segments: list, audio_path: Path, model_name: str) -
 # ─── Translation Backends ─────────────────────────────────────────
 
 def translate_batch_with_deepl(texts: list, source: str, target: str, api_key: str) -> list:
-    """Translate a list of texts using DeepL API in a single batch request."""
+    """Translate a list of texts using DeepL API in a single batch request with retry logic."""
+    import time
     if not api_key or not texts:
         return texts
     
@@ -237,26 +238,38 @@ def translate_batch_with_deepl(texts: list, source: str, target: str, api_key: s
         
     source_lang = source.upper()
     
-    try:
-        response = requests.post(
-            url,
-            headers={
-                "Authorization": f"DeepL-Auth-Key {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "text": texts,
-                "source_lang": source_lang,
-                "target_lang": target_lang,
-            },
-            timeout=30
-        )
-        response.raise_for_status()
-        result = response.json()
-        return [t["text"] for t in result["translations"]]
-    except Exception as e:
-        print(f"  [WARNING] DeepL batch translation failed: {e}")
-        raise
+    max_retries = 5
+    backoff = 1.0
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                url,
+                headers={
+                    "Authorization": f"DeepL-Auth-Key {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "text": texts,
+                    "source_lang": source_lang,
+                    "target_lang": target_lang,
+                },
+                timeout=30
+            )
+            if response.status_code == 429:
+                # Rate limit hit, wait and retry
+                time.sleep(backoff)
+                backoff *= 2.0
+                continue
+            response.raise_for_status()
+            result = response.json()
+            return [t["text"] for t in result["translations"]]
+        except Exception as e:
+            if attempt == max_retries - 1:
+                print(f"  [WARNING] DeepL batch translation failed after {max_retries} attempts: {e}")
+                raise
+            time.sleep(backoff)
+            backoff *= 2.0
 
 def translate_with_deepl(text: str, source: str, target: str, api_key: str) -> str:
     """Translate a single text using DeepL API."""
@@ -269,9 +282,13 @@ def translate_with_deepl(text: str, source: str, target: str, api_key: str) -> s
 
 def translate_with_google(text: str, source: str, target: str) -> str:
     """Translate text using Google Translate (free)."""
-    translator = GoogleTranslator(source=source, target=target)
-    result = translator.translate(text)
-    return result if isinstance(result, str) else str(result)
+    try:
+        translator = GoogleTranslator(source=source, target=target)
+        result = translator.translate(text)
+        return result if isinstance(result, str) else str(result)
+    except Exception as e:
+        print(f"  [WARNING] Google Translate failed: {e}")
+        return text
 
 
 def translate_with_mymemory(text: str, source: str, target: str) -> str:

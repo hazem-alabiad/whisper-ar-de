@@ -125,12 +125,16 @@ def write_srt(segments: list, srt_path: Path) -> None:
 
 
 def write_triilingual_srt(arabic_segs: list, german_segs: list, english_segs: list, srt_path: Path) -> None:
-    """Write an Arabic-only merged SRT file."""
+    """Write a combined SRT file with Arabic, German, and English subtitles."""
     with open(srt_path, "w", encoding="utf-8") as f:
-        for i, ar in enumerate(arabic_segs, start=1):
+        for i, (ar, de, en) in enumerate(zip(arabic_segs, german_segs, english_segs), start=1):
             f.write(f"{i}\n")
             f.write(f"{format_time(ar['start'])} --> {format_time(ar['end'])}\n")
-            f.write(f"{ar['text'].strip()}\n\n")
+            f.write(f"AR: {ar['text'].strip()}\n")
+            f.write(f"DE: {de['text'].strip()}\n")
+            if en.get("text", "").strip():
+                f.write(f"EN: {en['text'].strip()}\n")
+            f.write("\n")
 
 
 def read_srt(srt_path: Path) -> list:

@@ -668,7 +668,9 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
     except Exception:
         pass
 
-    print(f"  Google verification: {report['google_verified']} verified, {report['google_mismatches']} mismatches")
+    google_verified = report.get("google_verified", report.get("mlx_llm_verified", 0))
+    google_mismatches = report.get("google_mismatches", report.get("mlx_llm_mismatches", 0))
+    print(f"  Verification: {google_verified} verified, {google_mismatches} mismatches")
     if start_idx < total:
         print(f"  Report saved to: {report_path}")
 

@@ -43,7 +43,6 @@ from pathlib import Path
 from typing import cast
 
 import mlx_whisper
-import requests
 from deep_translator import GoogleTranslator
 from dotenv import load_dotenv
 
@@ -289,56 +288,6 @@ def double_check_arabic_srt(segments: list, audio_path: Path, model_name: str, c
 
 # ─── Translation Backends ─────────────────────────────────────────
 
-def translate_batch_with_deepl(texts: list, source: str, target: str, api_key: str) -> list:
-    """Translate a list of texts using DeepL API in a single batch request with retry logic."""
-    import time
-    if not api_key or not texts:
-        return texts
-
-    # DeepL Free API key ends with :fx. Standard Pro key doesn't.
-    base_url = "https://api-free.deepl.com" if api_key.endswith(":fx") else "https://api.deepl.com"
-    url = f"{base_url}/v2/translate"
-
-    # DeepL requires target language code to be uppercase, and EN must specify variant (e.g. EN-US).
-    target_lang = target.upper()
-    if target_lang == "EN":
-        target_lang = "EN-US"
-
-    source_lang = source.upper()
-
-    max_retries = 5
-    backoff = 1.0
-
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(
-                url,
-                headers={
-                    "Authorization": f"DeepL-Auth-Key {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "text": texts,
-                    "source_lang": source_lang,
-                    "target_lang": target_lang,
-                },
-                timeout=30
-            )
-            if response.status_code == 429:
-                # Rate limit hit, wait and retry
-                time.sleep(backoff)
-                backoff *= 2.0
-                continue
-            response.raise_for_status()
-            result = response.json()
-            return [t["text"] for t in result["translations"]]
-        except Exception as e:
-            if attempt == max_retries - 1:
-                print(f"  [WARNING] DeepL batch translation failed after {max_retries} attempts: {e}")
-                raise
-            time.sleep(backoff)
-            backoff *= 2.0
-
 def translate_with_google(text: str, source: str, target: str) -> str:
     """Translate text using Google Translate (free) with retries."""
     import random
@@ -364,12 +313,12 @@ def translate_with_google(text: str, source: str, target: str) -> str:
     return text
 
 
-def get_translation_backend(args) -> tuple:
+def get_translation_backend(args) -> str:
     """Return translation backend. Priority: Google Translate (free) first, then local AI models."""
-    return ("google", "")
+    return "google"
 
 
-def translate_segment(text: str, source: str, target: str, backend: str, deepl_key: str) -> str:
+def translate_segment(text: str, source: str, target: str, backend: str = "google") -> str:
     """Translate segment using 3-Tier Fallback: 1. Google Free API -> 2. Local MarianMT NMT -> 3. Local MLX LLM."""
     if not text or not text.strip():
         return ""
@@ -436,7 +385,7 @@ def translate_segments(segments: list, output_dir: Path | None, args, deepl_key:
     if output_dir:
         temp_json = output_dir / "translation_temp.json"
         progress_file = output_dir / "translation_progress.json"
-        
+
         if temp_json.exists():
             try:
                 with open(temp_json, encoding="utf-8") as f:
@@ -515,24 +464,10 @@ def translate_segments(segments: list, output_dir: Path | None, args, deepl_key:
             save_progress()
             return batch_end
 
-        if backend == "deepl" and deepl_key:
-            try:
-                de_results = translate_batch_with_deepl(texts, "ar", "de", deepl_key)
-                en_results = translate_batch_with_deepl(texts, "ar", "en", deepl_key)
-                for idx, v_idx in enumerate(valid_indices):
-                    batch[v_idx]["text_de"] = de_results[idx]
-                    batch[v_idx]["text_en"] = en_results[idx]
-            except Exception as e:
-                print(f"  [WARNING] DeepL batch translation failed: {e}. Falling back to single segment translation...")
-                for i, seg in enumerate(batch):
-                    if seg['text'].strip():
-                        seg["text_de"] = translate_segment(seg['text'].strip(), "ar", "de", backend, deepl_key)
-                        seg["text_en"] = translate_segment(seg['text'].strip(), "ar", "en", backend, deepl_key)
-        else:
-            for i, seg in enumerate(batch):
-                if seg['text'].strip():
-                    seg["text_de"] = translate_segment(seg['text'].strip(), "ar", "de", backend, deepl_key)
-                    seg["text_en"] = translate_segment(seg['text'].strip(), "ar", "en", backend, deepl_key)
+        for i, seg in enumerate(batch):
+            if seg['text'].strip():
+                seg["text_de"] = translate_segment(seg['text'].strip(), "ar", "de", backend)
+                seg["text_en"] = translate_segment(seg['text'].strip(), "ar", "en", backend)
 
         # Mark as translated
         for i in range(batch_start, batch_end):
@@ -572,13 +507,8 @@ def translate_segments(segments: list, output_dir: Path | None, args, deepl_key:
 
 # ─── Verification with Report ─────────────────────────────────────
 
-def verify_translations_with_report(segments: list, output_dir: Path, args, deepl_key: str) -> dict:
-    """Verify translations using multiple AI tools with progress bar and save report.
-
-    Pass 1: Google Translate (free)
-    Pass 2: DeepL API (if available)
-    Pass 3: MyMemory Translate (free)
-    """
+def verify_translations_with_report(segments: list, output_dir: Path, args) -> dict:
+    """Verify translations using local AI models with progress bar and save report."""
     total = len(segments)
 
     # Setup ytemp.json path
@@ -1044,7 +974,7 @@ def main():
     # Step 0: Name & Detect existing output (Auto-detect from any existing pipeline file)
     base_name = None
     existing_files = list(output_dir.glob("*_ar.srt")) or list(output_dir.glob("*_video.mp4")) or list(output_dir.glob("translation_temp.json")) or list(output_dir.glob("*_compressed.mp4"))
-    
+
     if existing_files:
         sample_file = existing_files[0]
         name_stem = sample_file.stem
@@ -1154,12 +1084,12 @@ def main():
         print(f"       {len(segments)} segments loaded")
 
         # Verify with multiple AI tools
-        backend, deepl_key = get_translation_backend(args)
+        backend = get_translation_backend(args)
         args._backend = backend
-        verify_translations_with_report(segments, output_dir, args, deepl_key)
+        verify_translations_with_report(segments, output_dir, args)
     else:
         print("\n[3/6] Translating to German + English...")
-        backend, deepl_key = get_translation_backend(args)
+        backend = get_translation_backend(args)
         args._backend = backend
 
         if needs_retranslate:
@@ -1169,7 +1099,7 @@ def main():
             if progress_file.exists():
                 progress_file.unlink()
 
-        segments = translate_segments(segments, output_dir, args, deepl_key)
+        segments = translate_segments(segments, output_dir, args)
 
         # Write German SRT
         de_segments = []
@@ -1203,7 +1133,7 @@ def main():
         print(f"       Combined SRT: {combined_srt.name}")
 
         # Verify with multiple AI tools
-        verify_translations_with_report(segments, output_dir, args, deepl_key)
+        verify_translations_with_report(segments, output_dir, args)
 
     # Step 4: Compress video (skip if exists)
     if compressed_video.exists():

@@ -1039,20 +1039,19 @@ def main():
     print(f"  URL: {args.url}")
     print(f"{'='*60}\n")
 
-    # Step 0: Name & Detect existing output
+    # Step 0: Name & Detect existing output (Auto-detect from any existing pipeline file)
     base_name = None
-    existing_ar_srt = None
-    for f in output_dir.glob("*_ar.srt"):
-        existing_ar_srt = f
-        break
-
-    if existing_ar_srt:
-        base_name = existing_ar_srt.stem.removesuffix("_ar")
-        print(f"  Found existing Arabic SRT: {existing_ar_srt.name}")
-        print(f"     Resume with base name: {base_name}")
-        answer = input("  Re-use this base name? [Y/n]: ").strip().lower()
-        if answer in ("", "y", "yes"):
-            print(f"  Resuming with existing base name: {base_name}")
+    existing_files = list(output_dir.glob("*_ar.srt")) or list(output_dir.glob("*_video.mp4")) or list(output_dir.glob("translation_temp.json")) or list(output_dir.glob("*_compressed.mp4"))
+    
+    if existing_files:
+        sample_file = existing_files[0]
+        name_stem = sample_file.stem
+        for suffix in ["_ar", "_video", "_compressed", "_de", "_en", "_ar-de-en", "_summary"]:
+            name_stem = name_stem.removesuffix(suffix)
+        if name_stem and name_stem != "translation_temp":
+            base_name = name_stem
+            print(f"  Found existing workspace pipeline file: {sample_file.name}")
+            print(f"     Resuming pipeline with base name: {base_name}")
 
     if base_name is None:
         print("[0/6] Naming output files & selecting video quality...")

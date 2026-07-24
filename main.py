@@ -799,11 +799,11 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
             sub_layout = getattr(args, "sub_layout", None)
             if not sub_layout:
                 print("\n  Select Subtitle Burning Layout for Video:")
-                print("    [1] YouTube Style: German (Top) + English (Middle) + Arabic (Bottom)")
+                print("    [1] Split Style: German (Top) + English (Middle) + Arabic (Bottom)")
                 print("    [2] Single Bottom Stack: All languages stacked at bottom (like YouTube captions)")
                 print("    [3] Arabic Only at Bottom: Clean single-language bottom subtitle")
-                layout_choice = input("  Enter choice [1-3] (default: 1): ").strip()
-                sub_layout = layout_choice if layout_choice in ["1", "2", "3"] else "1"
+                layout_choice = input("  Enter choice [1-3] (default: 2 Single Bottom Stack): ").strip()
+                sub_layout = layout_choice if layout_choice in ["1", "2", "3"] else "2"
 
             if sub_layout == "2":
                 # YouTube bottom stack

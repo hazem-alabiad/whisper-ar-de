@@ -164,3 +164,28 @@ def double_check_translations_locally(segments: list[dict], target_lang: str = "
             print(f"  [WARNING] Dual check segment {i} failed: {e}")
 
     return results
+
+
+def verify_arabic_transcription_with_llm(arabic_text: str, model_id: str = _DEFAULT_MLX_MODEL) -> str:
+    """Proofread and double-check Arabic Whisper transcription using local MLX LLM."""
+    if not arabic_text or not arabic_text.strip():
+        return ""
+
+    model, tokenizer = load_mlx_model(model_id)
+
+    prompt = (
+        "You are an expert Arabic linguist and proofreader. "
+        "Correct any obvious spelling, grammar, or audio transcription errors in the following Arabic subtitle line. "
+        "Do NOT change the meaning or translate. Output ONLY the corrected Arabic text:\n\n"
+        f"Arabic Subtitle: {arabic_text}\n"
+        "Corrected Arabic:"
+    )
+
+    if hasattr(tokenizer, "apply_chat_template"):
+        messages = [{"role": "user", "content": prompt}]
+        formatted_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    else:
+        formatted_prompt = prompt
+
+    response = mlx_generate(model, tokenizer, prompt=formatted_prompt, max_tokens=256, verbose=False)
+    return response.strip().strip('"').strip("'")

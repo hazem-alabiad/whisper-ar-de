@@ -47,12 +47,16 @@ import requests
 from deep_translator import GoogleTranslator
 from dotenv import load_dotenv
 
-# Local translation backend
 try:
-    from local_translation import translate_with_local, translate_with_mlx_llm
+    from local_translation import (
+        translate_with_local,
+        translate_with_mlx_llm,
+        verify_arabic_transcription_with_llm,
+    )
 except ImportError:
     translate_with_local = None
     translate_with_mlx_llm = None
+    verify_arabic_transcription_with_llm = None
 
 # ─── Language Detection ───────────────────────────────────────────
 
@@ -362,25 +366,22 @@ def translate_with_google(text: str, source: str, target: str) -> str:
 
 
 def get_translation_backend(args) -> tuple:
-    """Return translation backend. Always defaults to local MLX/MarianMT model on Apple Silicon."""
-    return ("local", "")
+    """Return translation backend. Priority: Google Translate (free) first, then local AI models."""
+    return ("google", "")
 
 
 def translate_segment(text: str, source: str, target: str, backend: str, deepl_key: str) -> str:
-    """Translate a single segment using the specified backend."""
+    """Translate a single segment using Google Translate first, falling back to local AI."""
     try:
-        if backend == "local" or translate_with_local is not None:
-            return translate_with_local(text, source, target)
         return translate_with_google(text, source, target)
     except Exception as e:
-        print(f"  [WARNING] Local translation failed: {e}")
-        print("  Falling back to Google Translate...")
+        print(f"  [WARNING] Google Translate failed: {e}. Falling back to local AI model...")
         try:
-            return translate_with_google(text, source, target)
-        except Exception as e2:
-            print(f"  [ERROR] Fallback translation failed: {e2}")
+            if translate_with_local is not None:
+                return translate_with_local(text, source, target)
             return text
-            print(f"  [ERROR] Google Translate also failed: {e2}")
+        except Exception as e2:
+            print(f"  [ERROR] Local AI translation fallback failed: {e2}")
             return text
 
 
@@ -999,19 +1000,27 @@ def main():
         segments = read_srt(arabic_srt)
         print(f"       {len(segments)} segments loaded")
 
-        # Double-check Arabic transcription
+        # Double-check Arabic transcription with Local LLM
         if audio_path and audio_path.exists() and args.double_check:
-            print("\n  Double-checking Arabic transcription...")
-            double_check_segments = double_check_arabic_srt(
-                segments, audio_path, args.model,
-                condition_on_prev=args.condition_on_previous,
-                temperature=args.whisper_temperature,
-            )
-            print(f"  Double-check completed: {len(double_check_segments)} segments")
-            # Use the double-checked segments
-            segments = double_check_segments
-            write_srt(segments, arabic_srt)
-            print(f"  Updated Arabic SRT: {arabic_srt.name}")
+            print("\n  Double-checking Arabic transcription with Local LLM...")
+            if verify_arabic_transcription_with_llm is not None:
+                for seg in segments:
+                    original = seg.get("text", "").strip()
+                    if original:
+                        corrected = verify_arabic_transcription_with_llm(original)
+                        if corrected and corrected != original:
+                            seg["text"] = corrected
+                write_srt(segments, arabic_srt)
+                print(f"  Proofread & updated Arabic SRT: {arabic_srt.name}")
+            else:
+                double_check_segments = double_check_arabic_srt(
+                    segments, audio_path, args.model,
+                    condition_on_prev=args.condition_on_previous,
+                    temperature=args.whisper_temperature,
+                )
+                print(f"  Double-check completed: {len(double_check_segments)} segments")
+                segments = double_check_segments
+                write_srt(segments, arabic_srt)
     else:
         print(f"\n[2/6] Transcribing Arabic (model: {args.model})...")
         segments = transcribe_arabic(

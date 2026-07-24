@@ -373,7 +373,12 @@ def get_translation_backend(args) -> tuple:
 def translate_segment(text: str, source: str, target: str, backend: str, deepl_key: str) -> str:
     """Translate a single segment using Google Translate first, falling back to local AI."""
     try:
-        return translate_with_google(text, source, target)
+        res = translate_with_google(text, source, target)
+        if res and res.strip() != text.strip():
+            return res
+        if translate_with_local is not None:
+            return translate_with_local(text, source, target)
+        return text
     except Exception as e:
         print(f"  [WARNING] Google Translate failed: {e}. Falling back to local AI model...")
         try:
@@ -1143,12 +1148,87 @@ def main():
         print("       Cleaning up temporary files...")
         cleanup_temp_files(output_dir, base_name)
 
-    # Step 6: Summary
+    # Step 6: Summary & Rich Report Generation
     print("\n[6/6] Summary")
+
+    # Generate Markdown and HTML summary reports
+    md_report_path = output_dir / f"{base_name}_summary.md"
+    html_report_path = output_dir / f"{base_name}_summary.html"
+
+    video_size_mb = compressed_video.stat().st_size / (1024 * 1024) if compressed_video.exists() else 0.0
+    srt_lines_count = len(segments) if 'segments' in locals() else 0
+
+    md_content = f"""# 🎬 YouTube Processing Pipeline Report
+
+- **Source URL**: {args.url}
+- **Base Name**: `{base_name}`
+- **Processed At**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- **Total Segments**: {srt_lines_count}
+
+---
+
+## 📦 Generated Output Files
+
+1. **📹 Subtitled Video**: [`{compressed_video.name}`](file://{compressed_video.absolute()}) ({video_size_mb:.2f} MB)
+2. **📜 Tri-Lingual SRT**: [`{combined_srt.name}`](file://{combined_srt.absolute()}) (Arabic + German + English)
+
+---
+
+## 🤖 Dual AI Engine Stack
+
+- **ASR Model**: `mlx-whisper` (`{args.model}`) on Apple Silicon GPU
+- **Arabic Proofreading LLM**: `Qwen2.5-7B-Instruct-4bit` (MLX Metal GPU)
+- **NMT Model**: `MarianMT` (Helsinki-NLP) on PyTorch MPS GPU
+- **Verification LLM**: `Qwen2.5-7B-Instruct-4bit` (MLX Metal GPU)
+"""
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Pipeline Summary - {base_name}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0d1117; color: #c9d1d9; padding: 30px; line-height: 1.6; }}
+        .card {{ background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 24px; max-width: 800px; margin: 0 auto; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }}
+        h1 {{ color: #58a6ff; font-size: 24px; border-bottom: 1px solid #30363d; padding-bottom: 12px; margin-top: 0; }}
+        .metric {{ background: #21262d; border-radius: 8px; padding: 12px 16px; margin: 10px 0; font-family: monospace; display: flex; justify-content: space-between; }}
+        .highlight {{ color: #79c0ff; font-weight: bold; }}
+        a {{ color: #58a6ff; text-decoration: none; }}
+        a:hover {{ text-decoration: underline; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🎬 YouTube Pipeline Processing Summary</h1>
+        <p><strong>Source URL:</strong> <a href="{args.url}" target="_blank">{args.url}</a></p>
+        <p><strong>Base Name:</strong> <span class="highlight">{base_name}</span></p>
+
+        <h2>📦 Final Deliverables</h2>
+        <div class="metric"><span>📹 Video File:</span><span><strong>{compressed_video.name}</strong> ({video_size_mb:.2f} MB)</span></div>
+        <div class="metric"><span>📜 Subtitles (AR/DE/EN):</span><span><strong>{combined_srt.name}</strong> ({srt_lines_count} segments)</span></div>
+
+        <h2>🤖 AI Models Executed</h2>
+        <ul>
+            <li><strong>ASR Engine:</strong> MLX-Whisper ({args.model})</li>
+            <li><strong>LLM Arabic Proofreader:</strong> Qwen2.5-7B-Instruct-4bit</li>
+            <li><strong>Translation & Verification:</strong> Google Translate + MarianMT + Qwen2.5-7B</li>
+        </ul>
+    </div>
+</body>
+</html>"""
+
+    try:
+        md_report_path.write_text(md_content, encoding="utf-8")
+        html_report_path.write_text(html_content, encoding="utf-8")
+    except Exception as e:
+        print(f"  [WARNING] Could not write report files: {e}")
+
     print(f"\n{'='*60}")
-    print(f"  All done! Files in '{output_dir}/':")
-    print(f"     - {combined_srt.name} (Combined AR/DE/EN subtitles)")
-    print(f"     - {compressed_video.name}  (compressed video with burned subtitles)")
+    print(f"  All done! Files created in '{output_dir}/':")
+    print(f"     - {combined_srt.name}  (Combined AR/DE/EN subtitles)")
+    print(f"     - {compressed_video.name}   (Video with burned subtitles)")
+    print(f"     - {md_report_path.name}     (Markdown summary report)")
+    print(f"     - {html_report_path.name}   (HTML summary dashboard)")
     print(f"{'='*60}\n")
 
 

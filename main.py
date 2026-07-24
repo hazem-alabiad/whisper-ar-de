@@ -451,16 +451,36 @@ def translate_segments(segments: list, output_dir: Path | None, args, deepl_key:
     def save_live_backup(batch_end: int):
         if not output_dir:
             return
+        temp_json = output_dir / "translation_temp.json"
         temp_srt = output_dir / "translation_temp.srt"
         try:
+            # 1. Save live JSON backup with full AR, DE, EN metadata
+            live_segments = []
+            for i, seg in enumerate(segments[:batch_end], start=1):
+                live_segments.append({
+                    "id": i,
+                    "start": seg.get("start", 0.0),
+                    "end": seg.get("end", 0.0),
+                    "original_ar": seg.get("original_ar", seg.get("text", "")).strip(),
+                    "text_de": seg.get("text_de", "").strip(),
+                    "text_en": seg.get("text_en", "").strip(),
+                })
+            with open(temp_json, "w", encoding="utf-8") as f:
+                json.dump({"completed_count": len(live_segments), "segments": live_segments}, f, ensure_ascii=False, indent=2)
+
+            # 2. Save live SRT backup
             with open(temp_srt, "w", encoding="utf-8") as f:
                 for i, seg in enumerate(segments[:batch_end], start=1):
                     if seg.get("text_de", "").strip():
                         f.write(f"{i}\n")
                         f.write(f"{format_time(seg['start'])} --> {format_time(seg['end'])}\n")
-                        f.write(f"{seg['text_de'].strip()}\n\n")
+                        f.write(f"AR: {seg.get('original_ar', seg.get('text', '')).strip()}\n")
+                        f.write(f"DE: {seg.get('text_de', '').strip()}\n")
+                        if seg.get("text_en", "").strip():
+                            f.write(f"EN: {seg.get('text_en', '').strip()}\n")
+                        f.write("\n")
         except Exception as e:
-            print(f"  [WARNING] Could not save live backup: {e}")
+            print(f"  [WARNING] Could not save live JSON/SRT backup: {e}")
 
     def translate_batch(batch_start: int, batch_end: int) -> int:
         if any(i in translated_indices for i in range(batch_start, batch_end)):

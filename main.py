@@ -432,15 +432,35 @@ def translate_segments(segments: list, output_dir: Path | None, args, deepl_key:
     batch_size = 20
     max_workers = 3
 
-    # Resume support
+    # Enhanced Resume Support from translation_temp.json
     translated_indices = set()
     if output_dir:
+        temp_json = output_dir / "translation_temp.json"
         progress_file = output_dir / "translation_progress.json"
-        if progress_file.exists():
-            with open(progress_file) as f:
-                translated_indices = set(json.load(f))
-            if translated_indices:
-                print(f"  Resuming: {len(translated_indices)} segments already translated")
+        
+        if temp_json.exists():
+            try:
+                with open(temp_json, encoding="utf-8") as f:
+                    saved = json.load(f)
+                    saved_segs = saved.get("segments", [])
+                    for s_item in saved_segs:
+                        idx_0 = s_item["id"] - 1
+                        if 0 <= idx_0 < total:
+                            segments[idx_0]["text_de"] = s_item.get("text_de", "")
+                            segments[idx_0]["text_en"] = s_item.get("text_en", "")
+                            translated_indices.add(idx_0)
+                print(f"  Resuming: Restored {len(translated_indices)} segments from live JSON backup")
+            except Exception as e:
+                print(f"  [WARNING] Could not restore from live JSON backup: {e}")
+
+        if not translated_indices and progress_file.exists():
+            try:
+                with open(progress_file, encoding="utf-8") as f:
+                    translated_indices = set(json.load(f))
+                if translated_indices:
+                    print(f"  Resuming: {len(translated_indices)} segments already translated")
+            except Exception:
+                pass
 
     def save_progress():
         if output_dir:

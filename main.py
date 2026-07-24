@@ -371,23 +371,37 @@ def get_translation_backend(args) -> tuple:
 
 
 def translate_segment(text: str, source: str, target: str, backend: str, deepl_key: str) -> str:
-    """Translate a single segment using Google Translate first, falling back to local AI."""
+    """Translate segment using 3-Tier Fallback: 1. Google Free API -> 2. Local MarianMT NMT -> 3. Local MLX LLM."""
+    if not text or not text.strip():
+        return ""
+
+    # Tier 1: Google Free API
     try:
         res = translate_with_google(text, source, target)
         if res and res.strip() != text.strip():
             return res
-        if translate_with_local is not None:
-            return translate_with_local(text, source, target)
-        return text
     except Exception as e:
-        print(f"  [WARNING] Google Translate failed: {e}. Falling back to local AI model...")
-        try:
-            if translate_with_local is not None:
-                return translate_with_local(text, source, target)
-            return text
-        except Exception as e2:
-            print(f"  [ERROR] Local AI translation fallback failed: {e2}")
-            return text
+        print(f"  [WARNING] Google Free API translation failed: {e}. Trying Tier 2 (Local MarianMT)...")
+
+    # Tier 2: Local MarianMT NMT
+    try:
+        if translate_with_local is not None:
+            res = translate_with_local(text, source, target)
+            if res and res.strip() != text.strip():
+                return res
+    except Exception as e:
+        print(f"  [WARNING] Local MarianMT failed: {e}. Trying Tier 3 (Local MLX LLM)...")
+
+    # Tier 3: Local MLX LLM (Qwen2.5-7B-Instruct)
+    try:
+        if translate_with_mlx_llm is not None:
+            res = translate_with_mlx_llm(text, source, target)
+            if res and res.strip():
+                return res
+    except Exception as e:
+        print(f"  [ERROR] Tier 3 Local MLX LLM translation failed: {e}")
+
+    return text
 
 
 def _assign_translations(batch: list, combined_text: str, lang_key: str) -> None:
@@ -555,15 +569,16 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
             print(f"  [WARNING] Could not read ytemp.json: {e}. Starting verification from scratch.")
             start_idx = 0
 
-    # Setup verify_count limit
-    verify_count = getattr(args, "verify_count", 20)
-    if verify_count < 0 or verify_count > total:
+    # Default verification runs on 100% of all segments
+    verify_count = getattr(args, "verify_count", total)
+    if verify_count is None or verify_count <= 0 or verify_count > total:
         verify_count = total
 
     if start_idx < verify_count:
-        print(f"\n  Verifying translations with Dual Local AI (up to {verify_count} segments)...")
-        print("  Pass 1: MarianMT (NMT on Apple Silicon MPS)")
-        print("  Pass 2: MLX LLM (Qwen2.5 on Apple Silicon Metal)")
+        print(f"\n  Verifying all translations with Local LLM ({verify_count}/{total} segments)...")
+        print("  Pass 1: Google Free API Translation")
+        print("  Pass 2: Local MarianMT NMT Verification")
+        print("  Pass 3: Local Qwen2.5 LLM Verification")
 
     for idx in range(start_idx + 1, verify_count + 1):
         seg = segments[idx - 1]

@@ -612,6 +612,7 @@ def cleanup_temp_files(output_dir: Path, base_name: str) -> None:
     temp_files = [
         output_dir / "translation_progress.json",
         output_dir / "translation_temp.srt",
+        output_dir / "translation_temp.json",
         output_dir / "reports" / "verification_live.json",
         output_dir / "ytemp.json",
         output_dir / f"{base_name}_ar.srt",

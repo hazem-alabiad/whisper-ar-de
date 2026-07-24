@@ -106,7 +106,7 @@ def translate_batch_local(texts: list[str], source: str, target: str) -> list[st
 # ─── Model 2: Local MLX LLM (Qwen2.5 / Apple Silicon Metal GPU) ────────
 
 def translate_with_mlx_llm(text: str, source: str, target: str, model_id: str = _DEFAULT_MLX_MODEL) -> str:
-    """Translate text using Model 2 (Local MLX quantized LLM on Apple Silicon Metal GPU)."""
+    """Translate text using Model 2 (Native MLX quantized LLM on Apple Silicon Metal GPU)."""
     if not text or not text.strip():
         return ""
 

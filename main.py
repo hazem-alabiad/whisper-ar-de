@@ -1,23 +1,24 @@
 """
-YouTube Arabic → German → English Pipeline
-===========================================
+YouTube Arabic → German → English Dual Local AI Pipeline
+========================================================
 
-Downloads a YouTube video, transcribes Arabic audio to SRT,
-translates to German and English SRT (verified with multiple AI tools),
-and compresses the video to ~50 MB with burned subtitles.
+Downloads a YouTube video, transcribes Arabic audio to SRT (proofread by local LLM),
+translates to German and English SRT (via 3-Tier fallback: Google Free -> MarianMT -> MLX Qwen2.5-7B),
+verifies 100% of translations using local LLM on Apple Silicon Metal GPU,
+and renders subtitled video with automatic cleanup and rich Markdown/HTML reports.
 
-Translation backends (in priority order):
-  1. DeepL API (requires DEEPL_API_KEY)
-  2. Google Translate (free fallback, no key needed)
+Translation Backends (3-Tier Fallback):
+  1. Google Translate (Free API)
+  2. Local MarianMT NMT (PyTorch MPS GPU)
+  3. Local MLX LLM (Qwen2.5-7B-Instruct-4bit on Metal GPU)
 
-Multi-pass verification:
-  - Pass 1: Google Translate (free)
-  - Pass 2: DeepL API (if available)
-  - Pass 3: MyMemory Translate (free)
+Multi-pass Verification:
+  - Pass 1: Google Free API Translation
+  - Pass 2: Local MarianMT NMT Verification
+  - Pass 3: Local Qwen2.5-7B LLM Verification
 
-Uses MLX-Whisper for fast transcription on Apple Silicon GPU.
-Resume support: re-run the same command and it detects existing
-output files, skipping completed steps automatically.
+Uses MLX-Whisper for fast speech-to-text on Apple Silicon GPU.
+Resume support: re-run the same command and it detects existing output files, skipping completed steps automatically.
 
 Usage:
     python main.py <youtube_url>
@@ -26,10 +27,9 @@ Example:
     python main.py https://youtu.be/MgxTrPOkhDU
 
 Flags:
-    --min-quality       Download minimum quality video/audio
-    --cleanup           Clean up temp files after completion
-    --force-retranslate Force re-translation even if German SRT exists
-    --deepl-key         DeepL API key for translation/verification
+    --quality           Set video download quality preset (1/low, 2/medium, 3/high, 4/best)
+    --double-check      Proofread Arabic transcription with local LLM
+    --no-cleanup        Keep temporary intermediate files
 """
 
 import argparse

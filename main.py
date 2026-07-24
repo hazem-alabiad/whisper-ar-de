@@ -125,17 +125,12 @@ def write_srt(segments: list, srt_path: Path) -> None:
 
 
 def write_triilingual_srt(arabic_segs: list, german_segs: list, english_segs: list, srt_path: Path) -> None:
-    """Write a combined SRT file with Arabic, German, and English subtitles.
-
-    Each subtitle block contains all three languages, separated by lines.
-    """
+    """Write an Arabic-only merged SRT file."""
     with open(srt_path, "w", encoding="utf-8") as f:
-        for i, (ar, de, en) in enumerate(zip(arabic_segs, german_segs, english_segs), start=1):
+        for i, ar in enumerate(arabic_segs, start=1):
             f.write(f"{i}\n")
             f.write(f"{format_time(ar['start'])} --> {format_time(ar['end'])}\n")
-            f.write(f"[AR] {ar['text'].strip()}\n")
-            f.write(f"[DE] {de['text'].strip()}\n")
-            f.write(f"[EN] {en['text'].strip()}\n\n")
+            f.write(f"{ar['text'].strip()}\n\n")
 
 
 def read_srt(srt_path: Path) -> list:
@@ -722,7 +717,8 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
                    arabic_srt: Path | None = None,
                    german_srt: Path | None = None,
                    english_srt: Path | None = None,
-                   combined_srt: Path | None = None) -> None:
+                   combined_srt: Path | None = None,
+                   args: argparse.Namespace | None = None) -> None:
     """Compress video and burn subtitles using ffmpeg with progress bar.
 
     Burns up to 3 subtitle tracks:
@@ -795,9 +791,30 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
             current_label = "[0:v]"
             total_subtitles = len(burn_inputs)
 
-            german_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,SecondaryColour=&H000000&\\,OutlineColour=&H000000&\\,BackColour=&H00000000&\\,Bold=-1\\,Italic=0\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=8"
-            english_style = "FontName=Arial\\,FontSize=22\\,PrimaryColour=&H00FFFF&\\,SecondaryColour=&H000000&\\,OutlineColour=&H000000&\\,BackColour=&H00000000&\\,Bold=-1\\,Italic=0\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=5"
-            arabic_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,SecondaryColour=&H000000&\\,OutlineColour=&H000000&\\,BackColour=&H00000000&\\,Bold=-1\\,Italic=0\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=2"
+            # YouTube-style Bottom Subtitle Layout Menu (interactive / argument driven)
+            sub_layout = getattr(args, "sub_layout", None)
+            if not sub_layout:
+                print("\n  Select Subtitle Burning Layout for Video:")
+                print("    [1] YouTube Style: German (Top) + English (Middle) + Arabic (Bottom)")
+                print("    [2] Single Bottom Stack: All languages stacked at bottom (like YouTube captions)")
+                print("    [3] Arabic Only at Bottom: Clean single-language bottom subtitle")
+                layout_choice = input("  Enter choice [1-3] (default: 1): ").strip()
+                sub_layout = layout_choice if layout_choice in ["1", "2", "3"] else "1"
+
+            if sub_layout == "2":
+                # YouTube bottom stack
+                german_style = "FontName=Arial\\,FontSize=24\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=2\\,Shadow=1\\,MarginV=60\\,Alignment=2"
+                english_style = "FontName=Arial\\,FontSize=22\\,PrimaryColour=&H00FFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=2\\,Shadow=1\\,MarginV=38\\,Alignment=2"
+                arabic_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=2\\,Shadow=1\\,MarginV=12\\,Alignment=2"
+            elif sub_layout == "3":
+                # Arabic only at bottom
+                arabic_style = "FontName=Arial\\,FontSize=28\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=2.5\\,Shadow=1\\,MarginV=20\\,Alignment=2"
+                burn_inputs = [x for x in burn_inputs if x[0] == "ar"]
+            else:
+                # Default YouTube Style (Top/Middle/Bottom)
+                german_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=8"
+                english_style = "FontName=Arial\\,FontSize=22\\,PrimaryColour=&H00FFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=5"
+                arabic_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=2"
 
             if ("de", german_srt) in burn_inputs:
                 next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
@@ -971,6 +988,10 @@ def parse_args():
         "--no-cleanup",
         action="store_true",
         help="Keep temporary intermediate audio and raw video files after pipeline completes",
+    )
+    parser.add_argument(
+        "--sub-layout", type=str, choices=["1", "2", "3"],
+        help="Subtitle burning layout: 1=YouTube Top/Mid/Bot, 2=Bottom Stack, 3=Arabic Only Bottom",
     )
     parser.add_argument(
         "--skip-download",
@@ -1187,11 +1208,11 @@ def main():
         else:
             print(f"\n[4/6] Existing compressed video ({existing_size_mb:.1f} MB) exceeds target size ({args.target_size} MB). Re-compressing...")
             compress_video(video_path, compressed_video, args.target_size,
-                           arabic_srt, german_srt, english_srt, combined_srt)
+                           arabic_srt, german_srt, english_srt, combined_srt, args)
     else:
         print(f"\n[4/6] Compressing video (target: {args.target_size} MB)...")
         compress_video(video_path, compressed_video, args.target_size,
-                       arabic_srt, german_srt, english_srt, combined_srt)
+                       arabic_srt, german_srt, english_srt, combined_srt, args)
 
     # Delete monolingual SRT files (always, keeping only the combined/merged SRT)
     print("\n[5/6] Deleting monolingual SRT files...")
@@ -1208,12 +1229,17 @@ def main():
         print("       Cleaning up temporary files...")
         cleanup_temp_files(output_dir, base_name)
 
-    # Step 6: Summary & Rich Report Generation
+    # Step 6: Summary & Rich Report Generation (MD Report Only)
     print("\n[6/6] Summary")
 
-    # Generate Markdown and HTML summary reports
+    # Generate Markdown summary report
     md_report_path = output_dir / f"{base_name}_summary.md"
     html_report_path = output_dir / f"{base_name}_summary.html"
+    if html_report_path.exists():
+        try:
+            html_report_path.unlink()
+        except Exception:
+            pass
 
     video_size_mb = compressed_video.stat().st_size / (1024 * 1024) if compressed_video.exists() else 0.0
     srt_lines_count = len(segments) if 'segments' in locals() else 0
@@ -1230,7 +1256,7 @@ def main():
 ## 📦 Generated Output Files
 
 1. **📹 Subtitled Video**: [`{compressed_video.name}`](file://{compressed_video.absolute()}) ({video_size_mb:.2f} MB)
-2. **📜 Tri-Lingual SRT**: [`{combined_srt.name}`](file://{combined_srt.absolute()}) (Arabic + German + English)
+2. **📜 Arabic Subtitles**: [`{combined_srt.name}`](file://{combined_srt.absolute()})
 
 ---
 
@@ -1242,53 +1268,16 @@ def main():
 - **Verification LLM**: `Qwen2.5-7B-Instruct-4bit` (MLX Metal GPU)
 """
 
-    html_content = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Pipeline Summary - {base_name}</title>
-    <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0d1117; color: #c9d1d9; padding: 30px; line-height: 1.6; }}
-        .card {{ background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 24px; max-width: 800px; margin: 0 auto; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }}
-        h1 {{ color: #58a6ff; font-size: 24px; border-bottom: 1px solid #30363d; padding-bottom: 12px; margin-top: 0; }}
-        .metric {{ background: #21262d; border-radius: 8px; padding: 12px 16px; margin: 10px 0; font-family: monospace; display: flex; justify-content: space-between; }}
-        .highlight {{ color: #79c0ff; font-weight: bold; }}
-        a {{ color: #58a6ff; text-decoration: none; }}
-        a:hover {{ text-decoration: underline; }}
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>🎬 YouTube Pipeline Processing Summary</h1>
-        <p><strong>Source URL:</strong> <a href="{args.url}" target="_blank">{args.url}</a></p>
-        <p><strong>Base Name:</strong> <span class="highlight">{base_name}</span></p>
-
-        <h2>📦 Final Deliverables</h2>
-        <div class="metric"><span>📹 Video File:</span><span><strong>{compressed_video.name}</strong> ({video_size_mb:.2f} MB)</span></div>
-        <div class="metric"><span>📜 Subtitles (AR/DE/EN):</span><span><strong>{combined_srt.name}</strong> ({srt_lines_count} segments)</span></div>
-
-        <h2>🤖 AI Models Executed</h2>
-        <ul>
-            <li><strong>ASR Engine:</strong> MLX-Whisper ({args.model})</li>
-            <li><strong>LLM Arabic Proofreader:</strong> Qwen2.5-7B-Instruct-4bit</li>
-            <li><strong>Translation & Verification:</strong> Google Translate + MarianMT + Qwen2.5-7B</li>
-        </ul>
-    </div>
-</body>
-</html>"""
-
     try:
         md_report_path.write_text(md_content, encoding="utf-8")
-        html_report_path.write_text(html_content, encoding="utf-8")
     except Exception as e:
-        print(f"  [WARNING] Could not write report files: {e}")
+        print(f"  [WARNING] Could not write report file: {e}")
 
     print(f"\n{'='*60}")
     print(f"  All done! Files created in '{output_dir}/':")
-    print(f"     - {combined_srt.name}  (Combined AR/DE/EN subtitles)")
+    print(f"     - {combined_srt.name}  (Arabic subtitles SRT)")
     print(f"     - {compressed_video.name}   (Video with burned subtitles)")
     print(f"     - {md_report_path.name}     (Markdown summary report)")
-    print(f"     - {html_report_path.name}   (HTML summary dashboard)")
     print(f"{'='*60}\n")
 
 

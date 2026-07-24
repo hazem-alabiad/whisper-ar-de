@@ -34,27 +34,25 @@ Flags:
 
 import argparse
 import json
-import os
 import re
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import cast
 
-import time
-
+import mlx_whisper
 import requests
 from deep_translator import GoogleTranslator
 from dotenv import load_dotenv
 
-import mlx_whisper
-
 # Local translation backend
 try:
-    from local_translation import translate_with_local
+    from local_translation import translate_with_local, translate_with_mlx_llm
 except ImportError:
     translate_with_local = None
+    translate_with_mlx_llm = None
 
 # ─── Language Detection ───────────────────────────────────────────
 
@@ -139,7 +137,7 @@ def write_triilingual_srt(arabic_segs: list, german_segs: list, english_segs: li
 def read_srt(srt_path: Path) -> list:
     """Read any SRT file and return segments with start/end/text."""
     segments = []
-    with open(srt_path, "r", encoding="utf-8") as f:
+    with open(srt_path, encoding="utf-8") as f:
         lines = f.readlines()
     i = 0
     while i < len(lines):
@@ -165,13 +163,47 @@ def read_srt(srt_path: Path) -> list:
 
 # ─── Download ─────────────────────────────────────────────────────
 
-def download_youtube(url: str, output_dir: Path, min_quality: bool = False) -> dict:
+def select_video_quality(url: str, min_quality: bool = False) -> str:
+    """Query yt-dlp for available formats and prompt user to choose quality."""
+    if min_quality:
+        return "worstvideo[ext=mp4]+worstaudio[ext=m4a]/worst[ext=mp4]/worst"
+
+    print("\n  Fetching available video qualities from YouTube...")
+    try:
+        subprocess.run(
+            ["yt-dlp", "-F", url],
+            capture_output=True, text=True, check=True
+        )
+
+        presets = {
+            "1": ("Low (144p / 240p - smallest size & fastest)", "worstvideo[ext=mp4]+worstaudio[ext=m4a]/worst[ext=mp4]/worst"),
+            "2": ("Medium (360p / 480p - balanced quality)", "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best"),
+            "3": ("High (720p / 1080p - standard HD)", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best"),
+            "4": ("Best available (Max resolution)", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"),
+        }
+
+        print("\n  Select Video Download Quality:")
+        for key, (desc, _) in presets.items():
+            print(f"    [{key}] {desc}")
+
+        choice = input("\n  Enter choice [1-4] (default: 2 Medium): ").strip()
+        if choice in presets:
+            selected = presets[choice]
+            print(f"  Selected quality: {selected[0]}")
+            return selected[1]
+        else:
+            print("  Defaulting to Medium quality (360p / 480p)")
+            return presets["2"][1]
+    except (ValueError, KeyError, TypeError, EOFError, KeyboardInterrupt) as e:
+        print(f"  [WARNING] Could not fetch format options: {e}")
+        return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+
+
+def download_youtube(url: str, output_dir: Path, min_quality: bool = False, video_format: str | None = None) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if min_quality:
-        video_format = "worstvideo[ext=mp4]+worstaudio[ext=m4a]/worst[ext=mp4]/worst"
-    else:
-        video_format = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+    if not video_format:
+        video_format = select_video_quality(url, min_quality)
 
     video_template = output_dir / "%(id)s_video.%(ext)s"
     subprocess.run(
@@ -188,7 +220,7 @@ def download_youtube(url: str, output_dir: Path, min_quality: bool = False) -> d
             check=True, capture_output=True, text=True,
         )
         audio_path = audio_template_mp3
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         print("[WARNING] MP3 audio extraction failed, falling back to m4a audio download.")
         audio_template_m4a = output_dir / "%(id)s_audio.m4a"
         subprocess.run(
@@ -214,7 +246,7 @@ def transcribe_arabic(audio_path: Path, model_name: str, condition_on_prev: bool
     """Transcribe Arabic audio using MLX-Whisper on Apple Silicon GPU."""
     print(f"  Transcribing Arabic audio with MLX-Whisper ({model_name})...")
     hf_repo = model_name if "/" in model_name else f"mlx-community/whisper-{model_name}"
-    
+
     kwargs = {
         "path_or_hf_repo": hf_repo,
         "language": "ar",
@@ -235,7 +267,7 @@ def double_check_arabic_srt(segments: list, audio_path: Path, model_name: str, c
     """Re-transcribe Arabic audio to double-check the SRT."""
     print(f"  Double-checking Arabic transcription with MLX-Whisper ({model_name})...")
     hf_repo = model_name if "/" in model_name else f"mlx-community/whisper-{model_name}"
-    
+
     kwargs = {
         "path_or_hf_repo": hf_repo,
         "language": "ar",
@@ -259,21 +291,21 @@ def translate_batch_with_deepl(texts: list, source: str, target: str, api_key: s
     import time
     if not api_key or not texts:
         return texts
-    
+
     # DeepL Free API key ends with :fx. Standard Pro key doesn't.
     base_url = "https://api-free.deepl.com" if api_key.endswith(":fx") else "https://api.deepl.com"
     url = f"{base_url}/v2/translate"
-    
+
     # DeepL requires target language code to be uppercase, and EN must specify variant (e.g. EN-US).
     target_lang = target.upper()
     if target_lang == "EN":
         target_lang = "EN-US"
-        
+
     source_lang = source.upper()
-    
+
     max_retries = 5
     backoff = 1.0
-    
+
     for attempt in range(max_retries):
         try:
             response = requests.post(
@@ -304,100 +336,50 @@ def translate_batch_with_deepl(texts: list, source: str, target: str, api_key: s
             time.sleep(backoff)
             backoff *= 2.0
 
-def translate_with_deepl(text: str, source: str, target: str, api_key: str) -> str:
-    """Translate a single text using DeepL API."""
-    try:
-        results = translate_batch_with_deepl([text], source, target, api_key)
-        return results[0] if results else text
-    except Exception:
-        return text
-
-
 def translate_with_google(text: str, source: str, target: str) -> str:
-    """Translate text using Google Translate (free) with retries and MyMemory fallback."""
-    import time
+    """Translate text using Google Translate (free) with retries."""
     import random
-    
+    import time
+
     max_retries = 5
     backoff = 1.0
-    
+
     for attempt in range(max_retries):
         try:
             translator = GoogleTranslator(source=source, target=target)
             result = translator.translate(text)
             if result and result.strip():
                 return result if isinstance(result, str) else str(result)
-        except Exception as e:
+        except Exception:
             if attempt == max_retries - 1:
                 break
-            
-            # Sleep with some jitter
+
             sleep_time = backoff + random.uniform(0.1, 0.5)
             time.sleep(sleep_time)
             backoff *= 2.0
-            
-    # Fallback to MyMemory Translate if Google Translate failed completely
-    try:
-        mymemory_res = translate_with_mymemory(text, source, target)
-        if mymemory_res and mymemory_res.strip() != text.strip():
-            return mymemory_res
-    except Exception:
-        pass
-        
+
     return text
 
 
-def translate_with_mymemory(text: str, source: str, target: str) -> str:
-    """Translate text using MyMemory Translate (free)."""
-    from deep_translator import MyMemoryTranslator
-    
-    # Map 2-letter codes to full names that MyMemoryTranslator supports
-    lang_map = {
-        "ar": "arabic",
-        "de": "german",
-        "en": "english"
-    }
-    src_mapped = lang_map.get(source.lower(), source.lower())
-    tgt_mapped = lang_map.get(target.lower(), target.lower())
-    
-    try:
-        translator = MyMemoryTranslator(source=src_mapped, target=tgt_mapped)
-        result = translator.translate(text)
-        return result if isinstance(result, str) else str(result)
-    except Exception as e:
-        print(f"  [WARNING] MyMemory translation failed: {e}")
-        return text
-
-
 def get_translation_backend(args) -> tuple:
-    """Return the best available translation backend based on arguments.
-    Returns a tuple (backend_name, key) where backend_name is one of
-    'google', 'mymemory', 'deepl', or 'local'.
-    """
-    if getattr(args, 'local_translate', False):
-        return ("local", "")
-    # DeepL currently disabled; fallback to Google
-    return ("google", "")
-
+    """Return translation backend. Always defaults to local MLX/MarianMT model on Apple Silicon."""
+    return ("local", "")
 
 
 def translate_segment(text: str, source: str, target: str, backend: str, deepl_key: str) -> str:
     """Translate a single segment using the specified backend."""
     try:
-        if backend == "local":
-            if translate_with_local is None:
-                raise ImportError("Please install transformers and sentencepiece: pip install transformers sentencepiece")
+        if backend == "local" or translate_with_local is not None:
             return translate_with_local(text, source, target)
-        if backend == "deepl" and deepl_key:
-            return translate_with_deepl(text, source, target, deepl_key)
-        else:
-            return translate_with_google(text, source, target)
+        return translate_with_google(text, source, target)
     except Exception as e:
-        print(f"  [WARNING] Translation backend '{backend}' failed: {e}")
+        print(f"  [WARNING] Local translation failed: {e}")
         print("  Falling back to Google Translate...")
         try:
             return translate_with_google(text, source, target)
         except Exception as e2:
+            print(f"  [ERROR] Fallback translation failed: {e2}")
+            return text
             print(f"  [ERROR] Google Translate also failed: {e2}")
             return text
 
@@ -538,32 +520,26 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
     Pass 2: DeepL API (if available)
     Pass 3: MyMemory Translate (free)
     """
-    deepl_key = ""
-
     total = len(segments)
-    
+
     # Setup ytemp.json path
     ytemp_path = output_dir / "ytemp.json"
-    
+
     # Initialize report
     report = {
         "timestamp": datetime.now().isoformat(),
         "total_segments": total,
-        "google_verified": 0,
-        "google_mismatches": 0,
-        "deepl_verified": 0,
-        "deepl_mismatches": 0,
-        "mymemory_verified": 0,
-        "mymemory_mismatches": 0,
+        "mlx_llm_verified": 0,
+        "mlx_llm_mismatches": 0,
         "mismatches": [],
     }
-    
+
     start_idx = 0
-    
+
     # Resume support
     if ytemp_path.exists():
         try:
-            with open(ytemp_path, "r", encoding="utf-8") as f:
+            with open(ytemp_path, encoding="utf-8") as f:
                 saved_data = json.load(f)
                 if saved_data and "report" in saved_data:
                     report = saved_data["report"]
@@ -572,24 +548,21 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
         except Exception as e:
             print(f"  [WARNING] Could not read ytemp.json: {e}. Starting verification from scratch.")
             start_idx = 0
-            
+
     # Setup verify_count limit
     verify_count = getattr(args, "verify_count", 20)
     if verify_count < 0 or verify_count > total:
         verify_count = total
 
     if start_idx < verify_count:
-        print(f"\n  Verifying translations with multiple AI tools (up to {verify_count} segments)...")
-        print(f"  Pass 1: Google Translate (free)")
-        if deepl_key:
-            print(f"  Pass 2: DeepL API")
-        print(f"  Pass 3: MyMemory Translate (free)")
+        print(f"\n  Verifying translations with Dual Local AI (up to {verify_count} segments)...")
+        print("  Pass 1: MarianMT (NMT on Apple Silicon MPS)")
+        print("  Pass 2: MLX LLM (Qwen2.5 on Apple Silicon Metal)")
 
     for idx in range(start_idx + 1, verify_count + 1):
         seg = segments[idx - 1]
         original_text = seg.get("original_ar", "")
         if not original_text.strip():
-            # Update progress
             try:
                 with open(ytemp_path, "w", encoding="utf-8") as f:
                     json.dump({"completed_count": idx, "report": report}, f, ensure_ascii=False, indent=2)
@@ -598,52 +571,25 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
             continue
 
         current_de = seg.get("text_de", seg.get("text", "")).strip()
-        current_en = seg.get("text_en", "").strip()
 
-        # Pass 1: Google Translate
-        try:
-            google_de = translate_with_google(original_text, "ar", "de")
-            google_en = translate_with_google(original_text, "ar", "en")
-
-            de_match_google = google_de.strip() == current_de
-            en_match_google = google_en.strip() == current_en
-
-            if de_match_google:
-                report["google_verified"] += 1
-            else:
-                report["google_mismatches"] += 1
-                report["mismatches"].append({
-                    "segment": idx,
-                    "original_ar": original_text[:100],
-                    "current_de": current_de[:100],
-                    "google_de": google_de[:100],
-                    "current_en": current_en[:100],
-                    "google_en": google_en[:100],
-                    "google_match": de_match_google,
-                })
-        except Exception:
-            pass
-
-        # Pass 2: DeepL API
-        if deepl_key:
+        # Pass 2: Local MLX LLM verification
+        if translate_with_mlx_llm is not None:
             try:
-                deepl_de = translate_with_deepl(original_text, "ar", "de", deepl_key)
-                if deepl_de.strip() == current_de:
-                    report["deepl_verified"] += 1
+                mlx_de = translate_with_mlx_llm(original_text, "ar", "de")
+                match_de = mlx_de.strip().lower() == current_de.lower()
+
+                if match_de:
+                    report["mlx_llm_verified"] += 1
                 else:
-                    report["deepl_mismatches"] += 1
+                    report["mlx_llm_mismatches"] += 1
+                    report["mismatches"].append({
+                        "segment": idx,
+                        "original_ar": original_text[:100],
+                        "marian_de": current_de[:100],
+                        "mlx_llm_de": mlx_de[:100],
+                    })
             except Exception:
                 pass
-
-        # Pass 3: MyMemory Translate
-        try:
-            mymemory_de = translate_with_mymemory(original_text, "ar", "de")
-            if mymemory_de.strip() == current_de:
-                report["mymemory_verified"] += 1
-            else:
-                report["mymemory_mismatches"] += 1
-        except Exception:
-            pass
 
         # Save live backup to ytemp.json
         try:
@@ -651,9 +597,6 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
                 json.dump({"completed_count": idx, "report": report}, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
-
-        # Rate-limiting delay to avoid exceeding API limits (e.g. 5 requests/sec)
-        time.sleep(0.5)
 
     # Save final report
     report_dir = output_dir / "reports"
@@ -666,9 +609,6 @@ def verify_translations_with_report(segments: list, output_dir: Path, args, deep
         pass
 
     print(f"  Google verification: {report['google_verified']} verified, {report['google_mismatches']} mismatches")
-    if deepl_key:
-        print(f"  DeepL verification: {report['deepl_verified']} verified, {report['deepl_mismatches']} mismatches")
-    print(f"  MyMemory verification: {report['mymemory_verified']} verified, {report['mymemory_mismatches']} mismatches")
     if start_idx < total:
         print(f"  Report saved to: {report_path}")
 
@@ -834,7 +774,7 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
             print("  [WARNING] Your FFmpeg lacks the 'subtitles' filter (compiled without libass).")
             print("            Falling back to embedding soft subtitles inside the MP4 video...")
             print("            (To burn hard subtitles, reinstall FFmpeg with libass: brew install ffmpeg)")
-            
+
             for _, srt_path in subtitle_inputs:
                 cmd.extend(["-i", str(srt_path)])
 
@@ -953,13 +893,14 @@ def parse_args():
         help="Download minimum quality video/audio to save bandwidth and space",
     )
     parser.add_argument(
-        "--deepl-key", type=str,
-        help="DeepL API key for translation/verification",
+        "--quality", type=str, choices=["1", "2", "3", "4", "low", "medium", "high", "best"],
+        help="Set video download quality preset directly without prompt (1/low, 2/medium, 3/high, 4/best)",
     )
     parser.add_argument(
         "--local-translate",
         action="store_true",
-        help="Use local LLM translation backend instead of online services",
+        default=True,
+        help="Use local neural model translation backend on Apple Silicon GPU/MPS",
     )
     parser.add_argument(
         "--verify-count", type=int, default=20,
@@ -1003,7 +944,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'='*60}")
-    print(f"  YouTube → Arabic/German/English Pipeline")
+    print("  YouTube → Arabic/German/English Pipeline")
     print(f"  URL: {args.url}")
     print(f"{'='*60}\n")
 
@@ -1046,7 +987,7 @@ def main():
         print(f"       Audio: {audio_path.name}")
     else:
         print("\n[1/6] Downloading video & audio...")
-        media = download_youtube(args.url, output_dir, args.min_quality)
+        media = download_youtube(args.url, output_dir, min_quality=args.min_quality, video_format=getattr(args, "quality", None))
         video_path = media["video"]
         audio_path = media["audio"]
         print(f"       Video: {video_path.name}")
@@ -1060,7 +1001,7 @@ def main():
 
         # Double-check Arabic transcription
         if audio_path and audio_path.exists() and args.double_check:
-            print(f"\n  Double-checking Arabic transcription...")
+            print("\n  Double-checking Arabic transcription...")
             double_check_segments = double_check_arabic_srt(
                 segments, audio_path, args.model,
                 condition_on_prev=args.condition_on_previous,
@@ -1089,7 +1030,7 @@ def main():
             # Check if German SRT actually contains Arabic text
             sample_text = de_segments[0]["text"]
             if is_arabic(sample_text):
-                print(f"\n  [WARNING] German SRT contains Arabic script! Re-translating.")
+                print("\n  [WARNING] German SRT contains Arabic script! Re-translating.")
                 needs_retranslate = True
 
     if german_srt.exists() and english_srt.exists() and not needs_retranslate:
@@ -1113,12 +1054,12 @@ def main():
         args._backend = backend
         verify_translations_with_report(segments, output_dir, args, deepl_key)
     else:
-        print(f"\n[3/6] Translating to German + English...")
+        print("\n[3/6] Translating to German + English...")
         backend, deepl_key = get_translation_backend(args)
         args._backend = backend
 
         if needs_retranslate:
-            print(f"  [INFO] Re-translating due to Arabic script in German SRT")
+            print("  [INFO] Re-translating due to Arabic script in German SRT")
             # Clear progress to force re-translation
             progress_file = output_dir / "translation_progress.json"
             if progress_file.exists():
@@ -1186,11 +1127,11 @@ def main():
 
     # Clean up temporary/intermediate files (always, unless --no-cleanup)
     if not args.no_cleanup:
-        print(f"       Cleaning up temporary files...")
+        print("       Cleaning up temporary files...")
         cleanup_temp_files(output_dir, base_name)
 
     # Step 6: Summary
-    print(f"\n[6/6] Summary")
+    print("\n[6/6] Summary")
     print(f"\n{'='*60}")
     print(f"  All done! Files in '{output_dir}/':")
     print(f"     - {combined_srt.name} (Combined AR/DE/EN subtitles)")

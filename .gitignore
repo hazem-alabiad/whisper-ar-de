@@ -17,3 +17,11 @@ output/
 .DS_Store
 *.mp4
 *.mp3
+
+# Downloaded AI Models & Cache
+model_cache/
+*.bin
+*.safetensors
+*.pth
+*.pt
+*.npz

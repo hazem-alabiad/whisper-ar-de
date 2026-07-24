@@ -968,6 +968,11 @@ def parse_args():
         help="Number of segments to verify during translation verification (default: 20, use -1 for all)",
     )
     parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="Keep temporary intermediate audio and raw video files after pipeline completes",
+    )
+    parser.add_argument(
         "--skip-download",
         action="store_true",
         help="Skip downloading video/audio if compressed video already exists with same base name",
@@ -1198,8 +1203,8 @@ def main():
             except Exception as e:
                 print(f"       [WARNING] Could not delete {srt_file.name}: {e}")
 
-    # Clean up temporary/intermediate files (always, unless --no-cleanup)
-    if not args.no_cleanup:
+    # Clean up temporary/intermediate files (always, unless --no-cleanup is passed)
+    if not getattr(args, "no_cleanup", False):
         print("       Cleaning up temporary files...")
         cleanup_temp_files(output_dir, base_name)
 

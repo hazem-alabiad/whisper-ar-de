@@ -588,10 +588,10 @@ def verify_translations_with_report(segments: list, output_dir: Path, args) -> d
         except Exception:
             pass
 
-    # Save final report
-    report_dir = output_dir / "reports"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    report_path = report_dir / f"verification_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    # Save final report in reports/ directory
+    reports_dir = output_dir / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report_path = reports_dir / f"verification_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     try:
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)

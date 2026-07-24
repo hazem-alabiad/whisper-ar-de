@@ -965,9 +965,13 @@ def main():
             print(f"  Resuming with existing base name: {base_name}")
 
     if base_name is None:
-        print("[0/6] Naming output files...")
+        print("[0/6] Naming output files & selecting video quality...")
         base_name = prompt_output_name(args.url)
         print(f"       Base name: {base_name}")
+
+    # Prompt quality upfront if not provided via CLI flag
+    if not getattr(args, "quality", None) and not args.min_quality:
+        args.quality = select_video_quality(args.url, args.min_quality)
 
     # Define output paths
     arabic_srt = output_dir / f"{base_name}_ar.srt"

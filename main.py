@@ -363,12 +363,12 @@ def _assign_translations(batch: list, combined_text: str, lang_key: str) -> None
             batch[idx][lang_key] = cleaned
 
 
-def translate_segments(segments: list, output_dir: Path | None, args, deepl_key: str) -> list:
+def translate_segments(segments: list, output_dir: Path | None, args) -> list:
     """Translate each segment's text from Arabic to German and English.
 
     Supports resume capability and live backup.
     """
-    backend, deepl_key = get_translation_backend(args)
+    backend = get_translation_backend(args)
     args._backend = backend
 
     # Store original Arabic text before translation

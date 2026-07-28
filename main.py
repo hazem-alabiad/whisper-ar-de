@@ -433,17 +433,18 @@ def translate_segments(segments: list, output_dir: Path | None, args) -> list:
             with open(temp_json, "w", encoding="utf-8") as f:
                 json.dump({"completed_count": len(live_segments), "segments": live_segments}, f, ensure_ascii=False, indent=2)
 
-            # 2. Save live SRT backup
-            with open(temp_srt, "w", encoding="utf-8") as f:
-                for i, seg in enumerate(segments[:batch_end], start=1):
-                    if seg.get("text_de", "").strip():
-                        f.write(f"{i}\n")
-                        f.write(f"{format_time(seg['start'])} --> {format_time(seg['end'])}\n")
-                        f.write(f"AR: {seg.get('original_ar', seg.get('text', '')).strip()}\n")
-                        f.write(f"DE: {seg.get('text_de', '').strip()}\n")
-                        if seg.get("text_en", "").strip():
-                            f.write(f"EN: {seg.get('text_en', '').strip()}\n")
-                        f.write("\n")
+            # 2. Save live SRT backup (if segments have timestamp timing metadata)
+            if any("start" in seg for seg in segments[:batch_end]):
+                with open(temp_srt, "w", encoding="utf-8") as f:
+                    for i, seg in enumerate(segments[:batch_end], start=1):
+                        if seg.get("text_de", "").strip():
+                            f.write(f"{i}\n")
+                            f.write(f"{format_time(seg.get('start', 0.0))} --> {format_time(seg.get('end', 0.0))}\n")
+                            f.write(f"AR: {seg.get('original_ar', seg.get('text', '')).strip()}\n")
+                            f.write(f"DE: {seg.get('text_de', '').strip()}\n")
+                            if seg.get("text_en", "").strip():
+                                f.write(f"EN: {seg.get('text_en', '').strip()}\n")
+                            f.write("\n")
         except Exception as e:
             print(f"  [WARNING] Could not save live JSON/SRT backup: {e}")
 

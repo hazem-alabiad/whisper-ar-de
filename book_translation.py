@@ -81,12 +81,14 @@ def chunk_text_into_paragraphs(text: str, max_chunk_chars: int = 1000) -> List[D
 
 
 def translate_book_interactive(book_path: Path, output_dir: Path, translate_segments_fn, args) -> Path:
-    """Interactively process and translate a book from Arabic to German, English, or Both."""
-    output_dir.mkdir(parents=True, exist_ok=True)
+    """Interactively process and translate a book from Arabic to German, English, or Both with dedicated directory & live backup."""
     base_name = book_path.stem
+    book_output_dir = output_dir / "books" / base_name
+    book_output_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"\n{'='*60}")
     print(f"  📚 Book Translation Mode: {book_path.name}")
+    print(f"  📁 Dedicated Book Output Directory: {book_output_dir}")
     print(f"{'='*60}")
     
     # 1. Target Language Selection
@@ -110,16 +112,16 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     segments = chunk_text_into_paragraphs(raw_text)
     print(f"       Extracted {len(segments)} paragraph chunks from book.")
     
-    # 3. Translate Segments via Pipeline
+    # 3. Translate Segments via Pipeline with dedicated directory for live JSON backups
     print(f"\n[2/3] Translating book paragraphs using 3-Tier AI Engine...")
-    translated_segments = translate_segments_fn(segments, output_dir, args)
+    translated_segments = translate_segments_fn(segments, book_output_dir, args)
     
     # 4. Save Output Book Files
     print(f"\n[3/3] Saving translated book deliverables...")
     
     # German Output
     if target_mode in ("de", "both"):
-        de_txt_path = output_dir / f"{base_name}_translated_de.txt"
+        de_txt_path = book_output_dir / f"{base_name}_translated_de.txt"
         de_text = "\n\n".join([s.get("text_de", s.get("text", "")) for s in translated_segments])
         de_txt_path.write_text(de_text, encoding="utf-8")
         print(f"       German Book (.txt): {de_txt_path.name}")
@@ -132,7 +134,7 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
                 p_text = s.get("text_de", s.get("text", "")).strip()
                 if p_text:
                     doc.add_paragraph(p_text)
-            de_docx_path = output_dir / f"{base_name}_translated_de.docx"
+            de_docx_path = book_output_dir / f"{base_name}_translated_de.docx"
             doc.save(str(de_docx_path))
             print(f"       German Book (.docx): {de_docx_path.name}")
         except Exception:
@@ -140,7 +142,7 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
 
     # English Output
     if target_mode in ("en", "both"):
-        en_txt_path = output_dir / f"{base_name}_translated_en.txt"
+        en_txt_path = book_output_dir / f"{base_name}_translated_en.txt"
         en_text = "\n\n".join([s.get("text_en", "") for s in translated_segments])
         en_txt_path.write_text(en_text, encoding="utf-8")
         print(f"       English Book (.txt): {en_txt_path.name}")
@@ -153,7 +155,7 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
                 p_text = s.get("text_en", "").strip()
                 if p_text:
                     doc.add_paragraph(p_text)
-            en_docx_path = output_dir / f"{base_name}_translated_en.docx"
+            en_docx_path = book_output_dir / f"{base_name}_translated_en.docx"
             doc.save(str(en_docx_path))
             print(f"       English Book (.docx): {en_docx_path.name}")
         except Exception:
@@ -161,7 +163,7 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
 
     # Dual Language Side-by-Side Markdown
     if target_mode == "both":
-        dual_md_path = output_dir / f"{base_name}_dual_ar_de_en.md"
+        dual_md_path = book_output_dir / f"{base_name}_dual_ar_de_en.md"
         md_lines = [f"# 📖 {base_name} - Tri-Lingual Book Edition\n"]
         for s in translated_segments:
             ar = s.get("original_ar", "").strip()
@@ -177,6 +179,6 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
         print(f"       Tri-Lingual Book (.md): {dual_md_path.name}")
 
     print(f"\n{'='*60}")
-    print(f"  🎉 Book Translation Complete! Output files saved in '{output_dir}/'")
+    print(f"  🎉 Book Translation Complete! Output files saved in '{book_output_dir}/'")
     print(f"{'='*60}\n")
-    return output_dir
+    return book_output_dir

@@ -195,6 +195,13 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
                 print("  [INFO] Cleared previous backup. Starting fresh translation from scratch!\n")
             else:
                 print("  [INFO] Resuming from existing backup to speed up translation!\n")
+        except ValueError as exc:
+            # Progress file has an unrecognised schema (e.g. old list format).
+            # Delete it so it doesn't keep triggering this warning every run.
+            logger.warning("Discarding malformed progress file (%s) — starting fresh.", exc)
+            progress_file.unlink(missing_ok=True)
+            if temp_json.exists():
+                temp_json.unlink(missing_ok=True)
         except Exception as exc:
             logger.debug("Could not read resume progress file: %s", exc)
     

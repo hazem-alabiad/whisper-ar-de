@@ -37,7 +37,7 @@ _MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _MLX_MODEL_DIR = _MODEL_CACHE_DIR / "mlx"
 _MLX_MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-_DEFAULT_MLX_MODEL = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+_DEFAULT_MLX_MODEL = "mlx-community/Qwen2.5-14B-Instruct-4bit"
 _MLX_MODEL_CACHE = {}
 
 def _model_name(source: str, target: str) -> str:

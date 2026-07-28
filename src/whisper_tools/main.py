@@ -741,16 +741,8 @@ def run_interactive_launcher(args):
                 while not book_path:
                     book_path = input("  Path cannot be empty. Enter path: ").strip()
                 args.book = book_path
-                
-            src = input(f"  Enter source language code (default: {getattr(args, 'source_lang', 'ar')}): ").strip().lower()
-            if src:
-                args.source_lang = src
-                
-            targets = input(f"  Enter comma-separated target language codes (default: {getattr(args, 'target_lang', 'de,en')}): ").strip().lower()
-            if targets:
-                args.target_lang = targets
 
-            local_ans = input("  Use local translation models? (y/n, default: y): ").strip().lower()
+            local_ans = input("\n  Use local translation models? (y/n, default: y): ").strip().lower()
             if local_ans == "n":
                 args.local_translate = False
             else:

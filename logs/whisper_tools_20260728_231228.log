@@ -1,2 +1,0 @@
-2026-07-29 01:12:28 | DEBUG    | whisper_tools.logging_config:80 | Logging initialised → /Users/hazem/ws/whisper-tools/logs/whisper_tools_20260728_231228.log (file) | console threshold: WARNING
-2026-07-29 01:12:28 | INFO     | whisper_tools.main:859 | whisper-tools session started — log: /Users/hazem/ws/whisper-tools/logs/whisper_tools_20260728_231228.log

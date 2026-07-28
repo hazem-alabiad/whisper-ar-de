@@ -203,18 +203,29 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     raw_text = extract_text_from_book(book_path)
     
     # 2.5 Optional AI Verification / Proofreading of Extracted Text
+    # The full book can easily exceed the LLM's context window (131k tokens),
+    # so we split into small chunks and proofread each one independently.
     if getattr(args, "verify_book", True) and getattr(args, "local_translate", True):
         try:
             from whisper_tools.translation import verify_transcription_with_llm
         except ImportError:
             from .translation import verify_transcription_with_llm
-            
+
+        _PROOFREAD_CHUNK_CHARS = 2000  # ~500 tokens — well within model limits
         print("       [AI Verification] Proofreading extracted book text for OCR/formatting fixes...")
         try:
-            proofread_text = verify_transcription_with_llm(raw_text, source_lang=source_lang)
-            if proofread_text and proofread_text.strip():
-                raw_text = proofread_text
-                print("       [AI Verification] Book text proofreading complete!")
+            chunks = [
+                raw_text[i : i + _PROOFREAD_CHUNK_CHARS]
+                for i in range(0, len(raw_text), _PROOFREAD_CHUNK_CHARS)
+            ]
+            proofread_chunks = []
+            for idx, chunk in enumerate(chunks, 1):
+                result = verify_transcription_with_llm(chunk, source_lang=source_lang)
+                proofread_chunks.append(result if result and result.strip() else chunk)
+                if idx % 10 == 0:
+                    print(f"       [AI Verification] Proofread {idx}/{len(chunks)} chunks...")
+            raw_text = "".join(proofread_chunks)
+            print("       [AI Verification] Book text proofreading complete!")
         except Exception as e:
             print(f"       [NOTE] AI book text proofreading skipped: {e}")
 

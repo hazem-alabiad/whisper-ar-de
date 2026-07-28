@@ -1,3 +1,0 @@
-2026-07-28 23:34:55 | DEBUG    | whisper_tools.logging_config:80 | Logging initialised → /Users/hazem/ws/whisper-tools/logs/whisper_tools_20260728_213455.log (file) | console threshold: WARNING
-2026-07-28 23:34:55 | DEBUG    | test:5 | debug msg — should appear in file only
-2026-07-28 23:34:55 | WARNING  | test:6 | warning msg — should appear in both

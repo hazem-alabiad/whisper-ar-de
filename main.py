@@ -318,36 +318,40 @@ def get_translation_backend(args) -> str:
     return "google"
 
 
-def translate_segment(text: str, source: str, target: str, backend: str = "google") -> str:
-    """Translate segment using 3-Tier Fallback: 1. Google Free API -> 2. Local MarianMT NMT -> 3. Local MLX LLM."""
+def translate_segment(text: str, source: str, target: str, backend: str = "local") -> str:
+    """Translate segment using 3-Tier Re-Organized AI Fallback:
+    1. Local MLX Metal GPU (Qwen2.5 / DeepSeek)
+    2. Local MarianMT NMT (PyTorch MPS GPU)
+    3. Google Free API (Emergency Cloud Fallback)
+    """
     if not text or not text.strip():
         return ""
 
-    # Tier 1: Google Free API
+    # Tier 1: Local MLX Neural LLM (Native Metal GPU - Highest Quality)
+    try:
+        if translate_with_mlx_llm is not None:
+            res = translate_with_mlx_llm(text, source, target)
+            if res and res.strip() and res.strip() != text.strip():
+                return res
+    except Exception as e:
+        print(f"  [WARNING] Tier 1 Local MLX LLM failed: {e}. Trying Tier 2 (Local MarianMT)...")
+
+    # Tier 2: Local MarianMT NMT (PyTorch MPS GPU - Fast Neural NMT)
+    try:
+        if translate_with_local is not None:
+            res = translate_with_local(text, source, target)
+            if res and res.strip() and res.strip() != text.strip():
+                return res
+    except Exception as e:
+        print(f"  [WARNING] Tier 2 Local MarianMT failed: {e}. Trying Tier 3 (Google Free API)...")
+
+    # Tier 3: Google Free API (Emergency Cloud Fallback)
     try:
         res = translate_with_google(text, source, target)
         if res and res.strip() != text.strip():
             return res
     except Exception as e:
-        print(f"  [WARNING] Google Free API translation failed: {e}. Trying Tier 2 (Local MarianMT)...")
-
-    # Tier 2: Local MarianMT NMT
-    try:
-        if translate_with_local is not None:
-            res = translate_with_local(text, source, target)
-            if res and res.strip() != text.strip():
-                return res
-    except Exception as e:
-        print(f"  [WARNING] Local MarianMT failed: {e}. Trying Tier 3 (Local MLX LLM)...")
-
-    # Tier 3: Local MLX LLM (Qwen2.5-7B-Instruct)
-    try:
-        if translate_with_mlx_llm is not None:
-            res = translate_with_mlx_llm(text, source, target)
-            if res and res.strip():
-                return res
-    except Exception as e:
-        print(f"  [ERROR] Tier 3 Local MLX LLM translation failed: {e}")
+        print(f"  [ERROR] All 3 translation tiers failed for text snippet: {e}")
 
     return text
 

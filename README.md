@@ -77,8 +77,10 @@ Select Target Translation Language(s):
 
 ### Deliverables Created in `output/books/<title>/`
 
-- **`<book>_translated_<lang>.txt` / `.docx`**: Dedicated target language translation documents.
-- **`<book>_dual_<source>_<targets>.md`**: Side-by-side multi-lingual Markdown edition.
+- **`<book>_translated_<lang>.pdf`**: Publisher-quality PDF e-book with running headers, footers, & page numbers.
+- **`<book>_translated_<lang>.epub`**: Digital EPUB e-book with table of contents for Apple Books, Kindle, and Kobo.
+- **`<book>_translated_<lang>.docx` / `.txt`**: Microsoft Word & plain text translation documents.
+- **`<book>_dual_<source>_<targets>.md` / `.pdf` / `.epub`**: Side-by-side multi-lingual edition.
 
 ---
 

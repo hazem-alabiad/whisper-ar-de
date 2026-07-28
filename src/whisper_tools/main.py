@@ -638,6 +638,10 @@ def parse_args():
         action="store_true",
         help="Skip downloading video/audio if compressed video already exists with same base name",
     )
+    parser.add_argument(
+        "--formats", type=str, default="all",
+        help="Comma-separated book export formats: pdf, epub, docx, md, or all (default: all)",
+    )
     return parser.parse_args()
 
 

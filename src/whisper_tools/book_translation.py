@@ -155,14 +155,21 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     print(f"\n[3/3] Saving translated book deliverables & summary report...")
     
     # Save each target language txt/docx
+    # Import e-book exporters
+    from whisper_tools.book_exporter import export_to_epub, export_to_pdf
+
+    # Save each target language txt/docx/pdf/epub
     generated_files = []
     for target in target_langs:
-        txt_path = book_output_dir / f"{base_name}_translated_{target}.txt"
         t_text = "\n\n".join([s.get(f"text_{target}", s.get("text", "")) for s in translated_segments])
+        
+        # 1. Plain Text (.txt)
+        txt_path = book_output_dir / f"{base_name}_translated_{target}.txt"
         txt_path.write_text(t_text, encoding="utf-8")
         print(f"       {target.upper()} Book (.txt): {txt_path.name}")
         generated_files.append(f"{target.upper()} Book (.txt): [`{txt_path.name}`](file://{txt_path.absolute()})")
         
+        # 2. Word Document (.docx)
         try:
             import docx
             doc = docx.Document()
@@ -178,7 +185,17 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
         except Exception:
             pass
 
-    # Multi-Language Side-by-Side Markdown
+        # 3. PDF E-Book (.pdf)
+        pdf_path = book_output_dir / f"{base_name}_translated_{target}.pdf"
+        if export_to_pdf(t_text, pdf_path, title=f"{base_name} ({target.upper()})"):
+            generated_files.append(f"{target.upper()} Book (.pdf): [`{pdf_path.name}`](file://{pdf_path.absolute()})")
+
+        # 4. EPUB E-Book (.epub)
+        epub_path = book_output_dir / f"{base_name}_translated_{target}.epub"
+        if export_to_epub(t_text, epub_path, title=f"{base_name} ({target.upper()})", language=target):
+            generated_files.append(f"{target.upper()} Book (.epub): [`{epub_path.name}`](file://{epub_path.absolute()})")
+
+    # Multi-Language Side-by-Side Markdown, PDF, and EPUB
     targets_suffix = "-".join(target_langs)
     dual_md_path = book_output_dir / f"{base_name}_dual_{source_lang}_{targets_suffix}.md"
     md_lines = [f"# 📖 {base_name} - Multi-Lingual Book Edition\n"]
@@ -190,9 +207,19 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
             trans = s.get(f"text_{target}", "").strip()
             md_lines.append(f"**{target.upper()}**: {trans}\n")
         md_lines.append("---\n")
-    dual_md_path.write_text("\n".join(md_lines), encoding="utf-8")
+    dual_md_content = "\n".join(md_lines)
+    dual_md_path.write_text(dual_md_content, encoding="utf-8")
     print(f"       Multi-Lingual Book (.md): {dual_md_path.name}")
     generated_files.append(f"Multi-Lingual Book (.md): [`{dual_md_path.name}`](file://{dual_md_path.absolute()})")
+
+    # Dual PDF & EPUB
+    dual_pdf_path = book_output_dir / f"{base_name}_dual_{source_lang}_{targets_suffix}.pdf"
+    if export_to_pdf(dual_md_content, dual_pdf_path, title=f"{base_name} Dual Edition"):
+        generated_files.append(f"Multi-Lingual Book (.pdf): [`{dual_pdf_path.name}`](file://{dual_pdf_path.absolute()})")
+
+    dual_epub_path = book_output_dir / f"{base_name}_dual_{source_lang}_{targets_suffix}.epub"
+    if export_to_epub(dual_md_content, dual_epub_path, title=f"{base_name} Dual Edition"):
+        generated_files.append(f"Multi-Lingual Book (.epub): [`{dual_epub_path.name}`](file://{dual_epub_path.absolute()})")
 
     # 6. Save Markdown Summary Report
     summary_report_path = book_output_dir / f"{base_name}_summary.md"

@@ -957,11 +957,22 @@ def main():
     args = parse_args()
 
     # Check for Book Translation Mode (--book argument or positional file path)
+    books_dir = Path("books")
+    books_dir.mkdir(exist_ok=True)
+
     book_file_path = None
     if args.book:
-        book_file_path = Path(args.book)
-    elif args.url and Path(args.url).is_file():
-        book_file_path = Path(args.url)
+        candidate = Path(args.book)
+        if candidate.is_file():
+            book_file_path = candidate
+        elif (books_dir / args.book).is_file():
+            book_file_path = books_dir / args.book
+    elif args.url:
+        candidate = Path(args.url)
+        if candidate.is_file():
+            book_file_path = candidate
+        elif (books_dir / args.url).is_file():
+            book_file_path = books_dir / args.url
 
     if book_file_path and book_file_path.exists():
         from book_translation import translate_book_interactive

@@ -9,7 +9,6 @@ All modules can then use the standard ``logging.getLogger(__name__)`` pattern.
 
 import logging
 import logging.handlers
-from datetime import UTC, datetime
 from pathlib import Path
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -22,16 +21,21 @@ def setup_logging(
     console_level: int = logging.WARNING,
     file_level: int = logging.DEBUG,
     max_bytes: int = 10 * 1024 * 1024,   # 10 MB per file
-    backup_count: int = 5,                # keep last 5 rotated files
+    backup_count: int = 1,                # keep only the latest log
 ) -> Path:
     """Configure the root logger with a rotating file handler and a console handler.
+
+    A single ``whisper_tools.log`` file is used for all sessions and rotated
+    in-place once it reaches *max_bytes*. Any legacy timestamped log files
+    (``whisper_tools_*.log``) left over from previous runs are removed on startup
+    so that the logs/ directory stays clean.
 
     Args:
         log_dir: Directory to store log files. Defaults to ``<cwd>/logs``.
         console_level: Minimum level for console output (default WARNING).
         file_level: Minimum level written to the log file (default DEBUG).
         max_bytes: Maximum log file size before rotation.
-        backup_count: Number of rotated backup files to retain.
+        backup_count: Number of rotated backup files to retain (default 1).
 
     Returns:
         Path to the active log file.
@@ -43,9 +47,15 @@ def setup_logging(
 
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    # Timestamped log file — one per session, rotated at max_bytes
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"whisper_tools_{timestamp}.log"
+    # Single fixed log file — rotated in-place, never multiplied per session.
+    log_file = log_dir / "whisper_tools.log"
+
+    # Remove legacy per-session timestamped files from previous runs.
+    for stale in log_dir.glob("whisper_tools_*.log"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass  # best-effort cleanup
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)   # capture everything; handlers filter

@@ -987,7 +987,12 @@ def main():
     if args.target_size > 100:
         print(f"[WARNING] Target size capped at 100 MB (requested {args.target_size} MB)")
         args.target_size = 100
+    # Separate video outputs into output/videos/
     output_dir = Path(args.output_dir)
+    if output_dir.name == "output":
+        output_dir = output_dir / "videos"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # Determine base name early to locate compressed file
     base_name = None
     # If we have an existing compressed video, infer base name from it

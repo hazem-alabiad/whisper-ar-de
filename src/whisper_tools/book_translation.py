@@ -122,6 +122,23 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     # 2. Extract & Chunk Text
     print(f"\n[1/3] Extracting text from {book_path.name}...")
     raw_text = extract_text_from_book(book_path)
+    
+    # 2.5 Optional AI Verification / Proofreading of Extracted Text
+    if getattr(args, "verify_book", True) and getattr(args, "local_translate", True):
+        try:
+            from whisper_tools.translation import verify_transcription_with_llm
+        except ImportError:
+            from .translation import verify_transcription_with_llm
+            
+        print(f"       [AI Verification] Proofreading extracted book text for OCR/formatting fixes...")
+        try:
+            proofread_text = verify_transcription_with_llm(raw_text, source_lang=source_lang)
+            if proofread_text and proofread_text.strip():
+                raw_text = proofread_text
+                print("       [AI Verification] Book text proofreading complete!")
+        except Exception as e:
+            print(f"       [NOTE] AI book text proofreading skipped: {e}")
+
     segments = chunk_text_into_paragraphs(raw_text)
     print(f"       Extracted {len(segments)} paragraph chunks from book.")
     

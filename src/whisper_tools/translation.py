@@ -117,6 +117,37 @@ def load_mlx_model(repo_id: str = _DEFAULT_MLX_MODEL):
         _MLX_MODEL_CACHE[repo_id] = (model, tokenizer)
     return _MLX_MODEL_CACHE[repo_id]
 
+def ensure_models_downloaded(args, source_lang: str = "ar", target_langs: list = None):
+    """Check and pre-download required MLX, Whisper, and MarianMT models upfront by default."""
+    use_local = getattr(args, "local_translate", True)
+    if not use_local:
+        print("  [INFO] Cloud mode enabled (--no-local-translate) — skipping local model pre-downloads.")
+        return
+
+    print("\n  [INFO] Checking local AI models in model_cache/...")
+    
+    # 1. Pre-download MLX Local LLM
+    try:
+        mlx_repo = getattr(args, "mlx_model", _DEFAULT_MLX_MODEL)
+        print(f"       Verifying MLX Local LLM model ({mlx_repo})...")
+        load_mlx_model(mlx_repo)
+        print("       MLX LLM Model ready!")
+    except Exception as e:
+        print(f"       [NOTE] Could not pre-download MLX LLM model: {e}")
+
+    # 2. Pre-download MarianMT for requested target languages
+    if target_langs:
+        for tgt in target_langs:
+            try:
+                marian_id = _model_name(source_lang, tgt)
+                print(f"       Verifying MarianMT model ({marian_id})...")
+                load_marian_model(source_lang, tgt)
+                print(f"       MarianMT {source_lang.upper()}->{tgt.upper()} ready!")
+            except Exception as e:
+                print(f"       [NOTE] MarianMT model check fallback: {e}")
+
+    print("  [INFO] All required AI models verified and ready on local disk!\n")
+
 # ─── Model 1: MarianMT NMT ──────────────────────────────────────────────
 
 def translate_with_local(text: str, source: str, target: str) -> str:

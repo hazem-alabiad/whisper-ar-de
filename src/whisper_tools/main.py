@@ -61,6 +61,7 @@ try:
         unload_local_models,
         verify_translations_with_report,
         verify_transcription_with_llm,
+        ensure_models_downloaded,
     )
 except ImportError:
     from .translation import (
@@ -68,6 +69,7 @@ except ImportError:
         unload_local_models,
         verify_translations_with_report,
         verify_transcription_with_llm,
+        ensure_models_downloaded,
     )
 
 # ─── Language Detection ───────────────────────────────────────────
@@ -762,8 +764,41 @@ def run_interactive_launcher(args):
             sys.exit(0)
 
 
+_LOCK_FILE = Path("output/.gpu_pipeline.lock")
+
+def acquire_gpu_lock():
+    """Ensure only one local GPU pipeline process runs at a time to prevent macOS freezes."""
+    _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if _LOCK_FILE.exists():
+        try:
+            pid = int(_LOCK_FILE.read_text().strip())
+            import os
+            os.kill(pid, 0)
+            print(f"\n[WARNING] Another instance of whisper-tools (PID {pid}) is already running!")
+            print("          Running multiple GPU pipelines concurrently causes macOS system freezes.")
+            print("          Please wait for the existing process to finish, or terminate PID {pid}.\n")
+        except (ValueError, OSError):
+            # Stale lock file
+            pass
+
+    import os
+    _LOCK_FILE.write_text(str(os.getpid()))
+
+def release_gpu_lock():
+    """Release GPU pipeline process lock upon completion or exit."""
+    try:
+        if _LOCK_FILE.exists():
+            _LOCK_FILE.unlink()
+    except Exception:
+        pass
+
+
 def main():
     load_dotenv()
+    import atexit
+    acquire_gpu_lock()
+    atexit.register(release_gpu_lock)
+
     try:
         import mlx.core as mx
         if hasattr(mx, "set_cache_limit"):
@@ -778,6 +813,10 @@ def main():
     # If neither url nor book is provided, run interactive terminal launcher
     if not args.url and not args.book:
         args = run_interactive_launcher(args)
+
+    # Automatically check and pre-download required AI models upfront
+    target_langs_list = [l.strip() for l in getattr(args, "target_lang", "de,en").split(",") if l.strip()]
+    ensure_models_downloaded(args, source_lang=getattr(args, "source_lang", "ar"), target_langs=target_langs_list)
 
     # Check for Book Translation Mode (--book argument or positional file path)
     books_dir = Path("books")

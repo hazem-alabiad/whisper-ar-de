@@ -17,6 +17,7 @@ try:
     from reportlab.lib.units import inch  # noqa: F401
     from reportlab.pdfgen import canvas
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+
     _REPORTLAB_AVAILABLE = True
 except ImportError:
     _REPORTLAB_AVAILABLE = False
@@ -26,6 +27,7 @@ try:
     import ebooklib  # noqa: F401
     import markdown
     from ebooklib import epub
+
     _EPUB_AVAILABLE = True
 except ImportError:
     _EPUB_AVAILABLE = False
@@ -37,35 +39,39 @@ class NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._saved_page_states = []
+        self._page_count = 0
 
     def showPage(self):
-        self._saved_page_states.append(dict(self.__dict__))
-        self._startPage()
+        self._page_count += 1
+        self._saved_page_states.append((self._page_count, dict(self.__dict__)))
+        super().showPage()
 
     def save(self):
         num_pages = len(self._saved_page_states)
-        for state in self._saved_page_states:
+        for page_number, state in self._saved_page_states:
             self.__dict__.update(state)
-            self.draw_page_decorations(num_pages)
+            self.draw_page_decorations(page_number, num_pages)
             super().showPage()
         super().save()
 
-    def draw_page_decorations(self, page_count: int):
+    def draw_page_decorations(self, page_number: int, page_count: int):
         self.saveState()
         self.setFont("Helvetica", 9)
         self.setFillColor(colors.HexColor("#666666"))
 
         # Skip running header/footer on first cover/title page
-        if self._pageNumber > 1:
+        if page_number > 1:
             # Header line
             self.setStrokeColor(colors.HexColor("#DDDDDD"))
             self.setLineWidth(0.5)
             self.line(54, letter[1] - 40, letter[0] - 54, letter[1] - 40)
-            self.drawString(54, letter[1] - 35, "Whisper-Tools AI E-Book Translation Edition")
+            self.drawString(
+                54, letter[1] - 35, "Whisper-Tools AI E-Book Translation Edition"
+            )
 
             # Footer line & page number
             self.line(54, 45, letter[0] - 54, 45)
-            page_text = f"Page {self._pageNumber} of {page_count}"
+            page_text = f"Page {page_number} of {page_count}"
             self.drawRightString(letter[0] - 54, 30, page_text)
 
         self.restoreState()
@@ -299,7 +305,7 @@ def export_to_epub(
         book.add_item(chapter)
 
         # TOC & Navigation
-        book.toc = (epub.Link("chap_1.xhtml", title, "chap_1"),)
+        book.toc = [epub.Link("chap_1.xhtml", title, "chap_1")]
         book.add_item(epub.EpubNcx())
         book.add_item(epub.EpubNav())
 

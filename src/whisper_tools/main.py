@@ -1097,6 +1097,8 @@ def main():
             try:
                 import json
                 prog_data = json.loads(progress_file.read_text(encoding="utf-8"))
+                if not isinstance(prog_data, dict):
+                    raise ValueError(f"Unexpected progress file format: {type(prog_data).__name__}")
                 completed_cnt = prog_data.get("completed_count", 0)
                 print(f"  [FOUND PREVIOUS BACKUP] Found translation progress for video '{base_name}' ({completed_cnt} segments completed).")
                 res_ans = input("  Resume from existing backup to speed up execution? (y/n, default: y): ").strip().lower()

@@ -644,7 +644,10 @@ def run_interactive_launcher(args):
     """Enter an interactive CLI configuration and mode selector menu when run without arguments."""
     import sys
     print("\n" + "=" * 60)
-    print("      🎬📖 Welcome to the Whisper-Tools Pipeline Launcher")
+    print("  🤖 WHISPER-TOOLS — BUILT WITH AGENTIC AI & LLM STACK")
+    print("=" * 60)
+    print("  ✨ Engineered 100% via Antigravity AI Pair Programming")
+    print("  🧠 Apple Silicon MLX GPU + Multi-Lingual Dual LLM Pipeline")
     print("=" * 60)
     
     while True:

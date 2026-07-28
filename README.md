@@ -66,3 +66,19 @@ If you want to bypass local neural models completely to save battery or keep you
 ```bash
 uv run whisper-tools "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --no-local-translate
 ```
+
+---
+
+## 🖥️ 4. Interactive Terminal Mode Launcher
+
+If you launch `whisper-tools` without arguments, it will automatically open an interactive menu:
+
+```bash
+uv run whisper-tools
+```
+
+### Interactive Menu Capabilities
+
+1. **🎬 YouTube Video Setup**: Enter video URL, select source/target languages, choose download quality presets, select Whisper ASR model size (`base`, `small`, `medium`, `large`), and select whether to run local MLX or Google Translate models.
+2. **📚 Book Translation Setup**: Automatically scans your `books/` workspace folder, lets you select a book by number or enter a custom path, and prompts for target languages.
+3. **📖 Flags & Options Guide**: Display an in-terminal cheat sheet detailing all available CLI parameters.

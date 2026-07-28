@@ -44,12 +44,12 @@ from pathlib import Path
 from typing import cast
 
 # Restrict global CPU threads & memory allocation to protect Mac hardware
-os.environ["OMP_NUM_THREADS"] = "2"
-os.environ["MKL_NUM_THREADS"] = "2"
-os.environ["OPENBLAS_NUM_THREADS"] = "2"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
-os.environ["NUMEXPR_NUM_THREADS"] = "2"
-os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.5"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.2"
 
 import mlx_whisper
 from deep_translator import GoogleTranslator
@@ -674,8 +674,23 @@ def run_interactive_launcher(args):
             quality = input("  Set video download quality preset [1=low, 2=medium, 3=high, 4=best] (default: ask upfront): ").strip()
             if quality in ("1", "2", "3", "4", "low", "medium", "high", "best"):
                 args.quality = quality
+
+            print("\n  Select Whisper ASR Model Size:")
+            print("    [1] base (150MB - Fastest, lowest memory usage)")
+            print("    [2] small (460MB - Balanced speed/accuracy)")
+            print("    [3] medium (1.5GB - High accuracy)")
+            print("    [4] large-v3-turbo-q4 (1.6GB - Best quality, default)")
+            model_choice = input("  Enter model choice [1-4] (default: 4): ").strip()
+            if model_choice == "1":
+                args.model = "base"
+            elif model_choice == "2":
+                args.model = "small"
+            elif model_choice == "3":
+                args.model = "medium"
+            else:
+                args.model = "large-v3-turbo-q4"
                 
-            local_ans = input("  Use local translation models? (y/n, default: y): ").strip().lower()
+            local_ans = input("\n  Use local translation models? (y/n, default: y): ").strip().lower()
             if local_ans == "n":
                 args.local_translate = False
             else:
@@ -746,6 +761,12 @@ def run_interactive_launcher(args):
 
 def main():
     load_dotenv()
+    try:
+        import mlx.core as mx
+        mx.metal.set_cache_limit(2 * 1024 * 1024 * 1024)  # Cap MLX Metal GPU cache at 2GB globally
+    except Exception:
+        pass
+
     args = parse_args()
 
     # If neither url nor book is provided, run interactive terminal launcher
@@ -911,6 +932,12 @@ def main():
     # Explicit memory cleanup after transcription stage
     if unload_local_models is not None:
         unload_local_models()
+    try:
+        import torch
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except Exception:
+        pass
 
     # Step 3: Translate
     all_targets_exist = all(path.exists() for path in target_srts.values())
@@ -986,6 +1013,12 @@ def main():
     # Explicit memory cleanup after translation stage
     if unload_local_models is not None:
         unload_local_models()
+    try:
+        import torch
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except Exception:
+        pass
 
     # Step 4: Compress video & burn subtitles (skip if exists)
     srt_files = {source_lang: source_srt}

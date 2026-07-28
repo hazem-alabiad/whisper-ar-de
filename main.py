@@ -32,6 +32,7 @@ Flags:
     --no-cleanup        Keep temporary intermediate files
 """
 
+import os
 import argparse
 import json
 import re
@@ -42,20 +43,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import cast
 
+# Restrict global CPU threads & memory allocation to protect Mac hardware
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
+os.environ["NUMEXPR_NUM_THREADS"] = "2"
+os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.5"
+
 import mlx_whisper
 from deep_translator import GoogleTranslator
 from dotenv import load_dotenv
 
 try:
     from local_translation import (
-        translate_with_local,
-        translate_with_mlx_llm,
-        verify_arabic_transcription_with_llm,
+        translate_segments,
+        unload_local_models,
+        verify_translations_with_report,
+        verify_transcription_with_llm,
     )
 except ImportError:
-    translate_with_local = None
-    translate_with_mlx_llm = None
-    verify_arabic_transcription_with_llm = None
+    translate_segments = None
+    unload_local_models = None
+    verify_translations_with_report = None
+    verify_transcription_with_llm = None
 
 # ─── Language Detection ───────────────────────────────────────────
 
@@ -123,16 +134,21 @@ def write_srt(segments: list, srt_path: Path) -> None:
             f.write(f"{seg['text'].strip()}\n\n")
 
 
-def write_triilingual_srt(arabic_segs: list, german_segs: list, english_segs: list, srt_path: Path) -> None:
-    """Write a combined SRT file with Arabic, German, and English subtitles."""
+def write_multilingual_srt(source_segs: list, target_segs_dict: dict[str, list], source_lang: str, target_langs: list[str], srt_path: Path) -> None:
+    """Write a combined SRT file with source and multiple target subtitles."""
     with open(srt_path, "w", encoding="utf-8") as f:
-        for i, (ar, de, en) in enumerate(zip(arabic_segs, german_segs, english_segs), start=1):
-            f.write(f"{i}\n")
-            f.write(f"{format_time(ar['start'])} --> {format_time(ar['end'])}\n")
-            f.write(f"AR: {ar['text'].strip()}\n")
-            f.write(f"DE: {de['text'].strip()}\n")
-            if en.get("text", "").strip():
-                f.write(f"EN: {en['text'].strip()}\n")
+        total = len(source_segs)
+        for idx in range(total):
+            f.write(f"{idx+1}\n")
+            src_seg = source_segs[idx]
+            f.write(f"{format_time(src_seg['start'])} --> {format_time(src_seg['end'])}\n")
+            f.write(f"{source_lang.upper()}: {src_seg['text'].strip()}\n")
+            for target_lang in target_langs:
+                segs = target_segs_dict.get(target_lang, [])
+                if idx < len(segs):
+                    text = segs[idx]['text'].strip()
+                    if text:
+                        f.write(f"{target_lang.upper()}: {text}\n")
             f.write("\n")
 
 
@@ -237,14 +253,14 @@ def download_youtube(url: str, output_dir: Path, base_name: str, min_quality: bo
 
 # ─── Transcription ─────────────────────────────────────────────────
 
-def transcribe_arabic(audio_path: Path, model_name: str, condition_on_prev: bool = False, temperature: float | None = None) -> list:
-    """Transcribe Arabic audio using MLX-Whisper on Apple Silicon GPU."""
-    print(f"  Transcribing Arabic audio with MLX-Whisper ({model_name})...")
+def transcribe_audio(audio_path: Path, model_name: str, source_lang: str = "ar", condition_on_prev: bool = False, temperature: float | None = None) -> list:
+    """Transcribe audio using MLX-Whisper on Apple Silicon GPU."""
+    print(f"  Transcribing audio with MLX-Whisper ({model_name}) in '{source_lang}'...")
     hf_repo = model_name if "/" in model_name else f"mlx-community/whisper-{model_name}"
 
     kwargs = {
         "path_or_hf_repo": hf_repo,
-        "language": "ar",
+        "language": source_lang,
         "verbose": False,
         "condition_on_previous_text": condition_on_prev,
     }
@@ -258,14 +274,14 @@ def transcribe_arabic(audio_path: Path, model_name: str, condition_on_prev: bool
     return cast(list, result["segments"])
 
 
-def double_check_arabic_srt(segments: list, audio_path: Path, model_name: str, condition_on_prev: bool = False, temperature: float | None = None) -> list:
-    """Re-transcribe Arabic audio to double-check the SRT."""
-    print(f"  Double-checking Arabic transcription with MLX-Whisper ({model_name})...")
+def double_check_srt_audio(segments: list, audio_path: Path, model_name: str, source_lang: str = "ar", condition_on_prev: bool = False, temperature: float | None = None) -> list:
+    """Re-transcribe audio to double-check the SRT."""
+    print(f"  Double-checking transcription with MLX-Whisper ({model_name}) in '{source_lang}'...")
     hf_repo = model_name if "/" in model_name else f"mlx-community/whisper-{model_name}"
 
     kwargs = {
         "path_or_hf_repo": hf_repo,
-        "language": "ar",
+        "language": source_lang,
         "verbose": False,
         "condition_on_previous_text": condition_on_prev,
     }
@@ -279,268 +295,8 @@ def double_check_arabic_srt(segments: list, audio_path: Path, model_name: str, c
     return cast(list, result["segments"])
 
 
-# ─── Translation Backends ─────────────────────────────────────────
-
-def translate_with_google(text: str, source: str, target: str) -> str:
-    """Translate text using Google Translate (free) with retries."""
-    import random
-    import time
-
-    max_retries = 5
-    backoff = 1.0
-
-    for attempt in range(max_retries):
-        try:
-            translator = GoogleTranslator(source=source, target=target)
-            result = translator.translate(text)
-            if result and result.strip():
-                return result if isinstance(result, str) else str(result)
-        except Exception:
-            if attempt == max_retries - 1:
-                break
-
-            sleep_time = backoff + random.uniform(0.1, 0.5)
-            time.sleep(sleep_time)
-            backoff *= 2.0
-
-    return text
 
 
-def get_translation_backend(args) -> str:
-    """Return translation backend. Priority: Google Translate (free) first, then local AI models."""
-    return "google"
-
-
-def translate_segment(text: str, source: str, target: str, backend: str = "local") -> str:
-    """Translate segment using 3-Tier Re-Organized AI Fallback:
-    1. Local MLX Metal GPU (Qwen2.5 / DeepSeek)
-    2. Local MarianMT NMT (PyTorch MPS GPU)
-    3. Google Free API (Emergency Cloud Fallback)
-    """
-    if not text or not text.strip():
-        return ""
-
-    # Tier 1: Local MLX Neural LLM (Native Metal GPU - Highest Quality)
-    try:
-        if translate_with_mlx_llm is not None:
-            res = translate_with_mlx_llm(text, source, target)
-            if res and res.strip() and res.strip() != text.strip():
-                return res
-    except Exception as e:
-        print(f"  [WARNING] Tier 1 Local MLX LLM failed: {e}. Trying Tier 2 (Local MarianMT)...")
-
-    # Tier 2: Local MarianMT NMT (PyTorch MPS GPU - Fast Neural NMT)
-    try:
-        if translate_with_local is not None:
-            res = translate_with_local(text, source, target)
-            if res and res.strip() and res.strip() != text.strip():
-                return res
-    except Exception as e:
-        print(f"  [WARNING] Tier 2 Local MarianMT failed: {e}. Trying Tier 3 (Google Free API)...")
-
-    # Tier 3: Google Free API (Emergency Cloud Fallback)
-    try:
-        res = translate_with_google(text, source, target)
-        if res and res.strip() != text.strip():
-            return res
-    except Exception as e:
-        print(f"  [ERROR] All 3 translation tiers failed for text snippet: {e}")
-
-    return text
-
-
-def _assign_translations(batch: list, combined_text: str, lang_key: str) -> None:
-    """Parse a combined numbered translation block back into the batch."""
-    lines = combined_text.strip().split("\n\n")
-    for idx, line in enumerate(lines):
-        if idx < len(batch) and line.strip():
-            cleaned = line.strip()
-            if cleaned.startswith("["):
-                cleaned = cleaned.split("]", 1)[1].strip()
-            batch[idx][lang_key] = cleaned
-
-
-def translate_segments(segments: list, output_dir: Path | None, args) -> list:
-    """Translate each segment's text from Arabic to German and English.
-
-    Supports resume capability and live backup.
-    """
-    backend = get_translation_backend(args)
-    args._backend = backend
-
-    # Store original Arabic text before translation
-    for seg in segments:
-        if "original_ar" not in seg:
-            seg["original_ar"] = seg["text"]
-
-    total = len(segments)
-    batch_size = 20
-    max_workers = 3
-
-    # Enhanced Resume Support from translation_temp.json
-    translated_indices = set()
-    if output_dir:
-        temp_json = output_dir / "translation_temp.json"
-        progress_file = output_dir / "translation_progress.json"
-
-        if temp_json.exists():
-            try:
-                with open(temp_json, encoding="utf-8") as f:
-                    saved = json.load(f)
-                    saved_segs = saved.get("segments", [])
-                    for s_item in saved_segs:
-                        idx_0 = s_item["id"] - 1
-                        if 0 <= idx_0 < total:
-                            segments[idx_0]["text_de"] = s_item.get("text_de", "")
-                            segments[idx_0]["text_en"] = s_item.get("text_en", "")
-                            translated_indices.add(idx_0)
-                print(f"  Resuming: Restored {len(translated_indices)} segments from live JSON backup")
-            except Exception as e:
-                print(f"  [WARNING] Could not restore from live JSON backup: {e}")
-
-        if not translated_indices and progress_file.exists():
-            try:
-                with open(progress_file, encoding="utf-8") as f:
-                    translated_indices = set(json.load(f))
-                if translated_indices:
-                    print(f"  Resuming: {len(translated_indices)} segments already translated")
-            except Exception:
-                pass
-
-    def save_progress():
-        if output_dir:
-            progress_file = output_dir / "translation_progress.json"
-            with open(progress_file, "w") as f:
-                json.dump(list(translated_indices), f)
-
-    def save_live_backup(batch_end: int):
-        if not output_dir:
-            return
-        temp_json = output_dir / "translation_temp.json"
-        temp_srt = output_dir / "translation_temp.srt"
-        try:
-            # 1. Save live JSON backup with full AR, DE, EN metadata
-            live_segments = []
-            for i, seg in enumerate(segments[:batch_end], start=1):
-                live_segments.append({
-                    "id": i,
-                    "start": seg.get("start", 0.0),
-                    "end": seg.get("end", 0.0),
-                    "original_ar": seg.get("original_ar", seg.get("text", "")).strip(),
-                    "text_de": seg.get("text_de", "").strip(),
-                    "text_en": seg.get("text_en", "").strip(),
-                })
-            with open(temp_json, "w", encoding="utf-8") as f:
-                json.dump({"completed_count": len(live_segments), "segments": live_segments}, f, ensure_ascii=False, indent=2)
-
-            # 2. Save live SRT backup (if segments have timestamp timing metadata)
-            if any("start" in seg for seg in segments[:batch_end]):
-                with open(temp_srt, "w", encoding="utf-8") as f:
-                    for i, seg in enumerate(segments[:batch_end], start=1):
-                        if seg.get("text_de", "").strip():
-                            f.write(f"{i}\n")
-                            f.write(f"{format_time(seg.get('start', 0.0))} --> {format_time(seg.get('end', 0.0))}\n")
-                            f.write(f"AR: {seg.get('original_ar', seg.get('text', '')).strip()}\n")
-                            f.write(f"DE: {seg.get('text_de', '').strip()}\n")
-                            if seg.get("text_en", "").strip():
-                                f.write(f"EN: {seg.get('text_en', '').strip()}\n")
-                            f.write("\n")
-        except Exception as e:
-            print(f"  [WARNING] Could not save live JSON/SRT backup: {e}")
-
-    def translate_batch(batch_start: int, batch_end: int) -> int:
-        if any(i in translated_indices for i in range(batch_start, batch_end)):
-            return batch_end
-
-        batch = segments[batch_start:batch_end]
-        valid_indices = [i for i, seg in enumerate(batch) if seg['text'].strip()]
-        texts = [batch[i]['text'].strip() for i in valid_indices]
-
-        if not texts:
-            for i in range(batch_start, batch_end):
-                translated_indices.add(i)
-            save_progress()
-            return batch_end
-
-        for i, seg in enumerate(batch):
-            if seg['text'].strip():
-                seg["text_de"] = translate_segment(seg['text'].strip(), "ar", "de", backend)
-                seg["text_en"] = translate_segment(seg['text'].strip(), "ar", "en", backend)
-
-        # Mark as translated
-        for i in range(batch_start, batch_end):
-            translated_indices.add(i)
-        save_progress()
-        save_live_backup(batch_end)
-
-        return batch_end
-
-
-    # Process batches in parallel
-    print(f"  Translating {total} segments Arabic → German + English ({backend} - standard mode) ...")
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
-        for batch_start in range(0, total, batch_size):
-            batch_end = min(batch_start + batch_size, total)
-            if not any(i in translated_indices for i in range(batch_start, batch_end)):
-                futures.append(executor.submit(translate_batch, batch_start, batch_end))
-
-        completed = 0
-        for future in as_completed(futures):
-            batch_end = future.result()
-            completed = max(completed, batch_end)
-            if completed % 10 == 0 or completed == total:
-                print(f"  Progress: {completed}/{total} ({completed*100//total}%)")
-
-    # Set text fields for German and English
-    for seg in segments:
-        if "text_de" in seg:
-            seg["text"] = seg["text_de"]
-        if "text_en" not in seg:
-            seg["text_en"] = seg.get("original_ar", seg.get("text", ""))
-
-    print(f"  Translation completed successfully ({backend})")
-    return segments
-
-
-# ─── Verification with Report ─────────────────────────────────────
-
-def verify_translations_with_report(segments: list[dict], output_dir: Path, args) -> dict:
-    """Generate verification report directly from the inline multi-pass self-refined translations."""
-    total = len(segments)
-    if total == 0:
-        return {}
-
-    verified_count = 0
-    mismatches = []
-
-    for idx, seg in enumerate(segments, start=1):
-        orig_ar = seg.get("original_ar", seg.get("text", "")).strip()
-        trans_de = seg.get("text_de", seg.get("text", "")).strip()
-        if orig_ar and trans_de:
-            verified_count += 1
-
-    report = {
-        "timestamp": datetime.now().isoformat(),
-        "total_segments": total,
-        "mlx_llm_verified": verified_count,
-        "mlx_llm_mismatches": 0,
-        "mismatches": mismatches,
-        "engine": "Qwen2.5-14B-Instruct-4bit (Multi-Pass Self-Refinement)",
-    }
-
-    # Save final report in reports/ directory
-    reports_dir = output_dir / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    report_path = reports_dir / f"verification_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    try:
-        with open(report_path, "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-
-    return report
 
 
 def cleanup_temp_files(output_dir: Path, base_name: str) -> None:
@@ -587,17 +343,13 @@ def cleanup_temp_files(output_dir: Path, base_name: str) -> None:
 # ─── Video Compression ────────────────────────────────────────────
 
 def compress_video(video_path: Path, output_path: Path, target_mb: int,
-                   arabic_srt: Path | None = None,
-                   german_srt: Path | None = None,
-                   english_srt: Path | None = None,
-                   combined_srt: Path | None = None,
+                   srt_files: dict[str, Path],
+                   source_lang: str,
+                   target_langs: list[str],
                    args: argparse.Namespace | None = None) -> None:
     """Compress video and burn subtitles using ffmpeg with progress bar.
 
-    Burns up to 3 subtitle tracks:
-    - Arabic (bottom)
-    - German (top)
-    - English (middle, if available)
+    Burns up to 3 subtitle tracks dynamically.
     """
     if not video_path.exists():
         print(f"  Warning: Video not found at {video_path}, skipping compression.")
@@ -638,14 +390,16 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
 
     # Add subtitle inputs if provided
     subtitle_inputs = []
-    if german_srt and german_srt.exists():
-        subtitle_inputs.append(("de", german_srt))
-    if english_srt and english_srt.exists():
-        subtitle_inputs.append(("en", english_srt))
-    if arabic_srt and arabic_srt.exists():
-        subtitle_inputs.append(("ar", arabic_srt))
-    if combined_srt and combined_srt.exists():
-        subtitle_inputs.append(("combined", combined_srt))
+    # Add source language first
+    if source_lang in srt_files and srt_files[source_lang].exists():
+        subtitle_inputs.append((source_lang, srt_files[source_lang]))
+    # Add target languages
+    for target in target_langs:
+        if target in srt_files and srt_files[target].exists():
+            subtitle_inputs.append((target, srt_files[target]))
+    # Add combined if present
+    if "combined" in srt_files and srt_files["combined"].exists():
+        subtitle_inputs.append(("combined", srt_files["combined"]))
 
     if subtitle_inputs:
         # Scenario 1: Burning subtitles (if supported)
@@ -664,52 +418,44 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
             current_label = "[0:v]"
             total_subtitles = len(burn_inputs)
 
-            # YouTube-style Bottom Subtitle Layout Menu (interactive / argument driven)
+            # Subtitle Layout Menu (interactive / argument driven)
             sub_layout = getattr(args, "sub_layout", None)
             if not sub_layout:
                 print("\n  Select Subtitle Burning Layout for Video:")
-                print("    [1] Split Style: German (Top) + English (Middle) + Arabic (Bottom)")
+                print(f"    [1] Split Style: {source_lang.upper()} (Bottom) + targets (Top/Middle)")
                 print("    [2] Single Bottom Stack: All languages stacked at bottom (like YouTube captions)")
-                print("    [3] Arabic Only at Bottom: Clean single-language bottom subtitle")
+                print(f"    [3] {source_lang.upper()} Only at Bottom: Clean single-language bottom subtitle")
                 layout_choice = input("  Enter choice [1-3] (default: 2 Single Bottom Stack): ").strip()
                 sub_layout = layout_choice if layout_choice in ["1", "2", "3"] else "2"
 
-            if sub_layout == "2":
-                # YouTube bottom stack (3 languages with distinct YouTube caption styling)
-                # German: Top line in stack (White with dark outline)
-                german_style = "FontName=Arial\\,FontSize=24\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BackColour=&H80000000&\\,BorderStyle=4\\,Outline=2\\,Shadow=1\\,MarginV=68\\,Alignment=2"
-                # English: Middle line in stack (Yellow/Cyan highlight)
-                english_style = "FontName=Arial\\,FontSize=22\\,PrimaryColour=&H00FFFF&\\,OutlineColour=&H000000&\\,BackColour=&H80000000&\\,BorderStyle=4\\,Outline=2\\,Shadow=1\\,MarginV=42\\,Alignment=2"
-                # Arabic: Bottom line in stack (Clear White bold)
-                arabic_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BackColour=&H80000000&\\,BorderStyle=4\\,Outline=2\\,Shadow=1\\,MarginV=14\\,Alignment=2"
-            elif sub_layout == "3":
-                # Arabic only at bottom
-                arabic_style = "FontName=Arial\\,FontSize=28\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=2.5\\,Shadow=1\\,MarginV=20\\,Alignment=2"
-                burn_inputs = [x for x in burn_inputs if x[0] == "ar"]
-            else:
-                # Default YouTube Style (Top/Middle/Bottom)
-                german_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=8"
-                english_style = "FontName=Arial\\,FontSize=22\\,PrimaryColour=&H00FFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=5"
-                arabic_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=2"
+            if sub_layout == "3":
+                burn_inputs = [x for x in burn_inputs if x[0] == source_lang]
+                total_subtitles = len(burn_inputs)
 
-            if ("de", german_srt) in burn_inputs:
+            for idx, (lang, srt_path) in enumerate(burn_inputs):
+                if sub_layout == "2":
+                    # YouTube bottom stack
+                    if idx == 0:  # Source language at bottom
+                        style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BackColour=&H80000000&\\,BorderStyle=4\\,Outline=2\\,Shadow=1\\,MarginV=14\\,Alignment=2"
+                    elif idx == 1:  # First target in middle
+                        style = "FontName=Arial\\,FontSize=22\\,PrimaryColour=&H00FFFF&\\,OutlineColour=&H000000&\\,BackColour=&H80000000&\\,BorderStyle=4\\,Outline=2\\,Shadow=1\\,MarginV=42\\,Alignment=2"
+                    else:  # Second target at top
+                        style = "FontName=Arial\\,FontSize=24\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BackColour=&H80000000&\\,BorderStyle=4\\,Outline=2\\,Shadow=1\\,MarginV=68\\,Alignment=2"
+                elif sub_layout == "3":
+                    # Source only at bottom
+                    style = "FontName=Arial\\,FontSize=28\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=2.5\\,Shadow=1\\,MarginV=20\\,Alignment=2"
+                else:
+                    # Split top/middle/bottom style
+                    if idx == 0:  # Bottom
+                        style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=2"
+                    elif idx == 1:  # Top
+                        style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=8"
+                    else:  # Middle
+                        style = "FontName=Arial\\,FontSize=22\\,PrimaryColour=&H00FFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=3\\,Shadow=1\\,MarginV=20\\,Alignment=5"
+
                 next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
                 filter_parts.append(
-                    f"{current_label}subtitles=filename='{escape_ffmpeg_path(german_srt)}':force_style='{german_style}'{next_label}"
-                )
-                current_label = next_label
-
-            if ("en", english_srt) in burn_inputs:
-                next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
-                filter_parts.append(
-                    f"{current_label}subtitles=filename='{escape_ffmpeg_path(english_srt)}':force_style='{english_style}'{next_label}"
-                )
-                current_label = next_label
-
-            if ("ar", arabic_srt) in burn_inputs:
-                next_label = f"[v{len(filter_parts)+1}]" if len(filter_parts) + 1 < total_subtitles else "[vout]"
-                filter_parts.append(
-                    f"{current_label}subtitles=filename='{escape_ffmpeg_path(arabic_srt)}':force_style='{arabic_style}'{next_label}"
+                    f"{current_label}subtitles=filename='{escape_ffmpeg_path(srt_path)}':force_style='{style}'{next_label}"
                 )
                 current_label = next_label
 
@@ -743,9 +489,10 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
             ])
             for idx, (lang, _) in enumerate(subtitle_inputs):
                 lang_map = {"de": "ger", "en": "eng", "ar": "ara", "combined": "mul"}
-                cmd.extend([f"-metadata:s:s:{idx}", f"language={lang_map.get(lang, lang)}"])
-                title_map = {"de": "German", "en": "English", "ar": "Arabic", "combined": "Tri-lingual (AR/DE/EN)"}
-                cmd.extend([f"-metadata:s:s:{idx}", f"title={title_map.get(lang, lang)}"])
+                cmd.extend([f"-metadata:s:s:{idx}", f"language={lang_map.get(lang, lang[:3])}"])
+                title_map = {"de": "German", "en": "English", "ar": "Arabic", "combined": "Combined Subtitles"}
+                lang_title = title_map.get(lang, f"{lang.upper()} Subtitles")
+                cmd.extend([f"-metadata:s:s:{idx}", f"title={lang_title}"])
 
             cmd.extend([
                 "-movflags", "+faststart",
@@ -823,6 +570,14 @@ def parse_args():
         help="Path to book file (.txt, .pdf, .docx, .md) to translate interactively",
     )
     parser.add_argument(
+        "--source-lang", type=str, default="ar",
+        help="Source language of the input (default: ar)",
+    )
+    parser.add_argument(
+        "--target-lang", type=str, default="de,en",
+        help="Comma-separated target languages for translation (default: de,en)",
+    )
+    parser.add_argument(
         "--model", type=str, default="large-v3-turbo-q4",
         help="Whisper model size (e.g. large-v3-turbo-q4, medium, large-v3-turbo, large-v3-4bit) or HF repo (default: large-v3-turbo-q4)",
     )
@@ -855,10 +610,10 @@ def parse_args():
         help="Set video download quality preset directly without prompt (1/low, 2/medium, 3/high, 4/best)",
     )
     parser.add_argument(
-        "--local-translate",
-        action="store_true",
-        default=True,
-        help="Use local neural model translation backend on Apple Silicon GPU/MPS",
+        "--no-local-translate",
+        action="store_false",
+        dest="local_translate",
+        help="Disable local neural models and fall back to Google Translate",
     )
     parser.add_argument(
         "--verify-count", type=int, default=20,
@@ -975,10 +730,14 @@ def main():
         args.quality = select_video_quality(args.url, args.min_quality)
 
     # Define output paths
-    arabic_srt = output_dir / f"{base_name}_ar.srt"
-    german_srt = output_dir / f"{base_name}_de.srt"
-    english_srt = output_dir / f"{base_name}_en.srt"
-    combined_srt = output_dir / f"{base_name}_ar-de-en.srt"
+    # Define source and target languages dynamically from arguments
+    source_lang = getattr(args, "source_lang", "ar").lower()
+    target_langs = [l.strip().lower() for l in getattr(args, "target_lang", "de,en").split(",") if l.strip()]
+
+    # Define output paths dynamically
+    source_srt = output_dir / f"{base_name}_{source_lang}.srt"
+    target_srts = {target: output_dir / f"{base_name}_{target}.srt" for target in target_langs}
+    combined_srt = output_dir / f"{base_name}_{source_lang}-" + "-".join(target_langs) + ".srt"
     compressed_video = output_dir / f"{base_name}_compressed.mp4"
 
     # Step 1: Download (skip if video+audio exist)
@@ -999,139 +758,142 @@ def main():
         print(f"       Video: {video_path.name}")
         print(f"       Audio: {audio_path.name}")
 
-    # Step 2: Transcribe (skip if Arabic SRT exists)
-    if arabic_srt.exists():
-        print(f"\n[2/6] Already transcribed — loading from {arabic_srt.name}")
-        segments = read_srt(arabic_srt)
+    # Step 2: Transcribe (skip if source SRT exists)
+    if source_srt.exists():
+        print(f"\n[2/6] Already transcribed — loading from {source_srt.name}")
+        segments = read_srt(source_srt)
         print(f"       {len(segments)} segments loaded")
 
-        # Double-check Arabic transcription with Local LLM
+        # Double-check transcription with Local LLM
         if audio_path and audio_path.exists() and args.double_check:
-            print("\n  Double-checking Arabic transcription with Local LLM...")
-            if verify_arabic_transcription_with_llm is not None:
+            print(f"\n  Double-checking transcription with Local LLM ({source_lang})...")
+            if verify_transcription_with_llm is not None:
                 for seg in segments:
                     original = seg.get("text", "").strip()
                     if original:
-                        corrected = verify_arabic_transcription_with_llm(original)
+                        corrected = verify_transcription_with_llm(original, source_lang=source_lang)
                         if corrected and corrected != original:
                             seg["text"] = corrected
-                write_srt(segments, arabic_srt)
-                print(f"  Proofread & updated Arabic SRT: {arabic_srt.name}")
+                write_srt(segments, source_srt)
+                print(f"  Proofread & updated source SRT: {source_srt.name}")
             else:
-                double_check_segments = double_check_arabic_srt(
-                    segments, audio_path, args.model,
+                double_check_segments = double_check_srt_audio(
+                    segments, audio_path, args.model, source_lang=source_lang,
                     condition_on_prev=args.condition_on_previous,
                     temperature=args.whisper_temperature,
                 )
                 print(f"  Double-check completed: {len(double_check_segments)} segments")
                 segments = double_check_segments
-                write_srt(segments, arabic_srt)
+                write_srt(segments, source_srt)
     else:
-        print(f"\n[2/6] Transcribing Arabic (model: {args.model})...")
-        segments = transcribe_arabic(
-            audio_path, args.model,
+        print(f"\n[2/6] Transcribing {source_lang.upper()} (model: {args.model})...")
+        segments = transcribe_audio(
+            audio_path, args.model, source_lang=source_lang,
             condition_on_prev=args.condition_on_previous,
             temperature=args.whisper_temperature,
         )
-        write_srt(segments, arabic_srt)
-        print(f"       Arabic SRT: {arabic_srt.name} ({len(segments)} segments)")
+        write_srt(segments, source_srt)
+        print(f"       Source SRT: {source_srt.name} ({len(segments)} segments)")
 
-    # Step 3: Translate (skip if German SRT exists and has proper German text)
+    # Explicit memory cleanup after transcription stage
+    if unload_local_models is not None:
+        unload_local_models()
+
+    # Step 3: Translate
+    all_targets_exist = all(path.exists() for path in target_srts.values())
     needs_retranslate = False
-    if german_srt.exists():
-        de_segments = read_srt(german_srt)
-        if de_segments:
-            # Check if German SRT actually contains Arabic text
-            sample_text = de_segments[0]["text"]
-            if is_arabic(sample_text):
-                print("\n  [WARNING] German SRT contains Arabic script! Re-translating.")
-                needs_retranslate = True
 
-    if german_srt.exists() and english_srt.exists() and not needs_retranslate:
-        print(f"\n[3/6] Already translated — loading from {german_srt.name} and {english_srt.name}")
-        arabic_segments = read_srt(arabic_srt) if arabic_srt.exists() else []
-        de_segments = read_srt(german_srt)
-        en_segments = read_srt(english_srt)
+    if all_targets_exist:
+        # Check if target SRTs contain untranslated source language text
+        for target, path in target_srts.items():
+            segs = read_srt(path)
+            if segs:
+                sample_text = segs[0]["text"]
+                if source_lang == "ar" and target in ("de", "en") and is_arabic(sample_text):
+                    print(f"\n  [WARNING] {target.upper()} SRT contains Arabic script! Re-translating.")
+                    needs_retranslate = True
+                    break
+
+    if all_targets_exist and not needs_retranslate:
+        print(f"\n[3/6] Already translated — loading target SRTs...")
+        source_segments = read_srt(source_srt) if source_srt.exists() else []
+        target_segs_dict = {target: read_srt(path) for target, path in target_srts.items()}
 
         # Merge into segments
-        for i, seg in enumerate(de_segments):
-            seg["original_ar"] = arabic_segments[i]["text"] if i < len(arabic_segments) else ""
-            seg["text_de"] = seg["text"]
-            seg["text_en"] = en_segments[i]["text"] if i < len(en_segments) else ""
-            seg["text"] = seg["text_de"]
+        for idx, seg in enumerate(source_segments):
+            seg["original_text"] = seg["text"]
+            for target, segs in target_segs_dict.items():
+                seg[f"text_{target}"] = segs[idx]["text"] if idx < len(segs) else ""
+            if target_langs:
+                seg["text"] = seg[f"text_{target_langs[0]}"]
 
-        segments = de_segments
+        segments = source_segments
         print(f"       {len(segments)} segments loaded")
 
-        # Verify with multiple AI tools
-        backend = get_translation_backend(args)
-        args._backend = backend
-        verify_translations_with_report(segments, output_dir, args)
+        if verify_translations_with_report is not None:
+            verify_translations_with_report(segments, output_dir, args, source_lang=source_lang, target_langs=target_langs)
     else:
-        print("\n[3/6] Translating to German + English...")
-        backend = get_translation_backend(args)
-        args._backend = backend
-
+        print(f"\n[3/6] Translating to {', '.join(t.upper() for t in target_langs)}...")
         if needs_retranslate:
-            print("  [INFO] Re-translating due to Arabic script in German SRT")
+            print("  [INFO] Re-translating due to script validation warning")
             # Clear progress to force re-translation
             progress_file = output_dir / "translation_progress.json"
             if progress_file.exists():
                 progress_file.unlink()
 
-        segments = translate_segments(segments, output_dir, args)
+        if translate_segments is not None:
+            segments = translate_segments(segments, output_dir, args, source_lang=source_lang, target_langs=target_langs)
 
-        # Write German SRT
-        de_segments = []
-        for seg in segments:
-            de_segments.append({
-                "start": seg["start"],
-                "end": seg["end"],
-                "text": seg.get("text_de", seg.get("text", "")),
-            })
-        write_srt(de_segments, german_srt)
-        print(f"       German SRT: {german_srt.name}")
+        # Write target language SRTs
+        for target, path in target_srts.items():
+            t_segs = []
+            for seg in segments:
+                t_segs.append({
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "text": seg.get(f"text_{target}", ""),
+                })
+            write_srt(t_segs, path)
+            print(f"       {target.upper()} SRT: {path.name}")
 
-        # Write English SRT
-        en_segments = []
-        for seg in segments:
-            en_segments.append({
-                "start": seg["start"],
-                "end": seg["end"],
-                "text": seg.get("text_en", ""),
-            })
-        write_srt(en_segments, english_srt)
-        print(f"       English SRT: {english_srt.name}")
-
-        # Write combined tri-lingual SRT
-        write_triilingual_srt(
-            [{"start": s["start"], "end": s["end"], "text": s.get("original_ar", s.get("text", ""))} for s in segments],
-            de_segments,
-            en_segments,
+        # Write combined multi-lingual SRT
+        target_segs_dict = {target: read_srt(path) for target, path in target_srts.items()}
+        write_multilingual_srt(
+            [{"start": s["start"], "end": s["end"], "text": s.get("original_text", s.get("text", ""))} for s in segments],
+            target_segs_dict,
+            source_lang,
+            target_langs,
             combined_srt,
         )
         print(f"       Combined SRT: {combined_srt.name}")
 
-        # Verify with multiple AI tools
-        verify_translations_with_report(segments, output_dir, args)
+        if verify_translations_with_report is not None:
+            verify_translations_with_report(segments, output_dir, args, source_lang=source_lang, target_langs=target_langs)
 
-    # Step 4: Compress video (skip if exists)
+    # Explicit memory cleanup after translation stage
+    if unload_local_models is not None:
+        unload_local_models()
+
+    # Step 4: Compress video & burn subtitles (skip if exists)
+    srt_files = {source_lang: source_srt}
+    for target, path in target_srts.items():
+        srt_files[target] = path
+    srt_files["combined"] = combined_srt
+
     if compressed_video.exists():
         existing_size_mb = compressed_video.stat().st_size / (1024 * 1024)
         if existing_size_mb <= args.target_size:
             print(f"\n[4/6] Compressed video already exists and is within target size ({existing_size_mb:.1f} MB): {compressed_video.name}")
         else:
             print(f"\n[4/6] Existing compressed video ({existing_size_mb:.1f} MB) exceeds target size ({args.target_size} MB). Re-compressing...")
-            compress_video(video_path, compressed_video, args.target_size,
-                           arabic_srt, german_srt, english_srt, combined_srt, args)
+            compress_video(video_path, compressed_video, args.target_size, srt_files, source_lang, target_langs, args)
     else:
         print(f"\n[4/6] Compressing video (target: {args.target_size} MB)...")
-        compress_video(video_path, compressed_video, args.target_size,
-                       arabic_srt, german_srt, english_srt, combined_srt, args)
+        compress_video(video_path, compressed_video, args.target_size, srt_files, source_lang, target_langs, args)
 
     # Delete monolingual SRT files (always, keeping only the combined/merged SRT)
     print("\n[5/6] Deleting monolingual SRT files...")
-    for srt_file in [arabic_srt, german_srt, english_srt]:
+    for srt_file in [source_srt] + list(target_srts.values()):
         if srt_file.exists():
             try:
                 srt_file.unlink()
@@ -1147,7 +909,6 @@ def main():
     # Step 6: Summary & Rich Report Generation (MD Report Only)
     print("\n[6/6] Summary")
 
-    # Generate Markdown summary report
     md_report_path = output_dir / f"{base_name}_summary.md"
     html_report_path = output_dir / f"{base_name}_summary.html"
     if html_report_path.exists():
@@ -1171,16 +932,15 @@ def main():
 ## 📦 Generated Output Files
 
 1. **📹 Subtitled Video**: [`{compressed_video.name}`](file://{compressed_video.absolute()}) ({video_size_mb:.2f} MB)
-2. **📜 Arabic Subtitles**: [`{combined_srt.name}`](file://{combined_srt.absolute()})
+2. **📜 Subtitles**: [`{combined_srt.name}`](file://{combined_srt.absolute()})
 
 ---
 
 ## 🤖 Dual AI Engine Stack
 
 - **ASR Model**: `mlx-whisper` (`{args.model}`) on Apple Silicon GPU
-- **Arabic Proofreading LLM**: `Qwen2.5-7B-Instruct-4bit` (MLX Metal GPU)
-- **NMT Model**: `MarianMT` (Helsinki-NLP) on PyTorch MPS GPU
-- **Verification LLM**: `Qwen2.5-7B-Instruct-4bit` (MLX Metal GPU)
+- **Translation Engine**: `{getattr(args, '_backend', 'local')}`
+- **Verification Engine**: `Qwen2.5-14B-Instruct-4bit` (MLX Metal GPU)
 """
 
     try:
@@ -1190,7 +950,7 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  All done! Files created in '{output_dir}/':")
-    print(f"     - {combined_srt.name}  (Arabic subtitles SRT)")
+    print(f"     - {combined_srt.name}  (Combined subtitles SRT)")
     print(f"     - {compressed_video.name}   (Video with burned subtitles)")
     print(f"     - {md_report_path.name}     (Markdown summary report)")
     print(f"{'='*60}\n")

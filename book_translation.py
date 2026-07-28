@@ -81,7 +81,7 @@ def chunk_text_into_paragraphs(text: str, max_chunk_chars: int = 1000) -> List[D
 
 
 def translate_book_interactive(book_path: Path, output_dir: Path, translate_segments_fn, args) -> Path:
-    """Interactively process and translate a book from Arabic to German, English, or Both with dedicated directory & live backup."""
+    """Interactively process and translate a book from any source language to multiple target languages with dedicated directory & live backup."""
     base_name = book_path.stem
     book_output_dir = output_dir / "books" / base_name
     book_output_dir.mkdir(parents=True, exist_ok=True)
@@ -91,20 +91,27 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     print(f"  📁 Dedicated Book Output Directory: {book_output_dir}")
     print(f"{'='*60}")
     
-    # 1. Target Language Selection
-    print("\n  Select Target Translation Language(s):")
-    print("    [1] German (Deutsch)")
-    print("    [2] English")
-    print("    [3] Both German & English (Dual Translation)")
-    lang_choice = input("\n  Enter choice [1-3] (default: 3 Both): ").strip()
-    if lang_choice == "1":
-        target_mode = "de"
-    elif lang_choice == "2":
-        target_mode = "en"
+    source_lang = getattr(args, "source_lang", "ar").lower()
+    target_langs_str = getattr(args, "target_lang", "de,en").lower()
+
+    # Determine target languages
+    if getattr(args, "url", None) is not None or getattr(args, "target_lang", None) is not None or getattr(args, "source_lang", None) is not None:
+        target_langs = [l.strip() for l in target_langs_str.split(",") if l.strip()]
     else:
-        target_mode = "both"
-        
-    print(f"  Selected target mode: {target_mode.upper()}")
+        # Prompt target selection
+        print("\n  Select Target Translation Language(s):")
+        print("    [1] German (Deutsch)")
+        print("    [2] English")
+        print("    [3] Both German & English (Dual Translation)")
+        lang_choice = input("\n  Enter choice [1-3] (default: 3 Both): ").strip()
+        if lang_choice == "1":
+            target_langs = ["de"]
+        elif lang_choice == "2":
+            target_langs = ["en"]
+        else:
+            target_langs = ["de", "en"]
+            
+    print(f"  Selected translation: {source_lang.upper()} → {', '.join(t.upper() for t in target_langs)}")
     
     # 2. Extract & Chunk Text
     print(f"\n[1/3] Extracting text from {book_path.name}...")
@@ -114,78 +121,61 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     
     # 3. Translate Segments via Pipeline with dedicated directory for live JSON backups
     print(f"\n[2/3] Translating book paragraphs using 3-Tier AI Engine...")
-    translated_segments = translate_segments_fn(segments, book_output_dir, args)
+    translated_segments = translate_segments_fn(segments, book_output_dir, args, source_lang=source_lang, target_langs=target_langs)
     
-    # 4. Save Extracted Raw Arabic Text Transcript File
-    extracted_ar_path = book_output_dir / f"{base_name}_extracted_arabic.txt"
-    extracted_ar_path.write_text(raw_text, encoding="utf-8")
-    print(f"       Extracted Arabic Transcript (.txt): {extracted_ar_path.name}")
-
+    # 4. Save Extracted Raw Text Transcript File
+    extracted_src_path = book_output_dir / f"{base_name}_extracted_{source_lang}.txt"
+    extracted_src_path.write_text(raw_text, encoding="utf-8")
+    print(f"       Extracted {source_lang.upper()} Transcript (.txt): {extracted_src_path.name}")
+ 
     # 5. Save Output Book Files
     print(f"\n[3/3] Saving translated book deliverables & summary report...")
     
-    # German Output
-    if target_mode in ("de", "both"):
-        de_txt_path = book_output_dir / f"{base_name}_translated_de.txt"
-        de_text = "\n\n".join([s.get("text_de", s.get("text", "")) for s in translated_segments])
-        de_txt_path.write_text(de_text, encoding="utf-8")
-        print(f"       German Book (.txt): {de_txt_path.name}")
+    # Save each target language txt/docx
+    generated_files = []
+    for target in target_langs:
+        txt_path = book_output_dir / f"{base_name}_translated_{target}.txt"
+        t_text = "\n\n".join([s.get(f"text_{target}", s.get("text", "")) for s in translated_segments])
+        txt_path.write_text(t_text, encoding="utf-8")
+        print(f"       {target.upper()} Book (.txt): {txt_path.name}")
+        generated_files.append(f"{target.upper()} Book (.txt): [`{txt_path.name}`](file://{txt_path.absolute()})")
         
         try:
             import docx
             doc = docx.Document()
-            doc.add_heading(f"{base_name} - German Translation", 0)
+            doc.add_heading(f"{base_name} - {target.upper()} Translation", 0)
             for s in translated_segments:
-                p_text = s.get("text_de", s.get("text", "")).strip()
+                p_text = s.get(f"text_{target}", s.get("text", "")).strip()
                 if p_text:
                     doc.add_paragraph(p_text)
-            de_docx_path = book_output_dir / f"{base_name}_translated_de.docx"
-            doc.save(str(de_docx_path))
-            print(f"       German Book (.docx): {de_docx_path.name}")
+            docx_path = book_output_dir / f"{base_name}_translated_{target}.docx"
+            doc.save(str(docx_path))
+            print(f"       {target.upper()} Book (.docx): {docx_path.name}")
+            generated_files.append(f"{target.upper()} Book (.docx): [`{docx_path.name}`](file://{docx_path.absolute()})")
         except Exception:
             pass
 
-    # English Output
-    if target_mode in ("en", "both"):
-        en_txt_path = book_output_dir / f"{base_name}_translated_en.txt"
-        en_text = "\n\n".join([s.get("text_en", "") for s in translated_segments])
-        en_txt_path.write_text(en_text, encoding="utf-8")
-        print(f"       English Book (.txt): {en_txt_path.name}")
-        
-        try:
-            import docx
-            doc = docx.Document()
-            doc.add_heading(f"{base_name} - English Translation", 0)
-            for s in translated_segments:
-                p_text = s.get("text_en", "").strip()
-                if p_text:
-                    doc.add_paragraph(p_text)
-            en_docx_path = book_output_dir / f"{base_name}_translated_en.docx"
-            doc.save(str(en_docx_path))
-            print(f"       English Book (.docx): {en_docx_path.name}")
-        except Exception:
-            pass
-
-    # Dual Language Side-by-Side Markdown
-    if target_mode == "both":
-        dual_md_path = book_output_dir / f"{base_name}_dual_ar_de_en.md"
-        md_lines = [f"# 📖 {base_name} - Tri-Lingual Book Edition\n"]
-        for s in translated_segments:
-            ar = s.get("original_ar", "").strip()
-            de = s.get("text_de", "").strip()
-            en = s.get("text_en", "").strip()
-            md_lines.append(f"### Segment {s['id']}\n")
-            md_lines.append(f"**Arabic**: {ar}\n")
-            md_lines.append(f"**German**: {de}\n")
-            if en:
-                md_lines.append(f"**English**: {en}\n")
-            md_lines.append("---\n")
-        dual_md_path.write_text("\n".join(md_lines), encoding="utf-8")
-        print(f"       Tri-Lingual Book (.md): {dual_md_path.name}")
+    # Multi-Language Side-by-Side Markdown
+    targets_suffix = "-".join(target_langs)
+    dual_md_path = book_output_dir / f"{base_name}_dual_{source_lang}_{targets_suffix}.md"
+    md_lines = [f"# 📖 {base_name} - Multi-Lingual Book Edition\n"]
+    for s in translated_segments:
+        orig = s.get("original_text", s.get("original_ar", s.get("text", ""))).strip()
+        md_lines.append(f"### Segment {s['id']}\n")
+        md_lines.append(f"**{source_lang.upper()} (Source)**: {orig}\n")
+        for target in target_langs:
+            trans = s.get(f"text_{target}", "").strip()
+            md_lines.append(f"**{target.upper()}**: {trans}\n")
+        md_lines.append("---\n")
+    dual_md_path.write_text("\n".join(md_lines), encoding="utf-8")
+    print(f"       Multi-Lingual Book (.md): {dual_md_path.name}")
+    generated_files.append(f"Multi-Lingual Book (.md): [`{dual_md_path.name}`](file://{dual_md_path.absolute()})")
 
     # 6. Save Markdown Summary Report
     summary_report_path = book_output_dir / f"{base_name}_summary.md"
     from datetime import datetime
+    
+    files_list_md = "\n".join([f"{idx+1}. {item}" for idx, item in enumerate(generated_files)])
     report_md = f"""# 📚 Book Translation & Transcript Report
 
 - **Source Book**: `{book_path.name}`
@@ -198,17 +188,15 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
 
 ## 📦 Generated Book Files
 
-1. **📄 Extracted Arabic Text Transcript**: [`{extracted_ar_path.name}`](file://{extracted_ar_path.absolute()})
-2. **📖 German Book (.txt)**: [`{base_name}_translated_de.txt`](file://{(book_output_dir / f'{base_name}_translated_de.txt').absolute()})
-3. **📖 English Book (.txt)**: [`{base_name}_translated_en.txt`](file://{(book_output_dir / f'{base_name}_translated_en.txt').absolute()})
-4. **📖 Tri-Lingual Book (.md)**: [`{base_name}_dual_ar_de_en.md`](file://{(book_output_dir / f'{base_name}_dual_ar_de_en.md').absolute()})
+1. **📄 Extracted {source_lang.upper()} Text Transcript**: [`{extracted_src_path.name}`](file://{extracted_src_path.absolute()})
+{files_list_md}
 
 ---
 
 ## 🤖 AI Engine Stack
 
 - **Extraction**: `pypdf` / `python-docx` / UTF-8 Text Engine
-- **Primary AI LLM**: `Qwen2.5-14B-Instruct-4bit` (MLX Metal GPU)
+- **Primary AI LLM**: `Qwen2.5-3B-Instruct-8bit` / Local Fallback MarianMT (MLX Metal/MPS GPU)
 - **Translation Strategy**: Multi-Pass Agentic Self-Refinement (Draft -> Critique & Refine)
 """
     summary_report_path.write_text(report_md, encoding="utf-8")

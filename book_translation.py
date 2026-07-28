@@ -116,8 +116,13 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     print(f"\n[2/3] Translating book paragraphs using 3-Tier AI Engine...")
     translated_segments = translate_segments_fn(segments, book_output_dir, args)
     
-    # 4. Save Output Book Files
-    print(f"\n[3/3] Saving translated book deliverables...")
+    # 4. Save Extracted Raw Arabic Text Transcript File
+    extracted_ar_path = book_output_dir / f"{base_name}_extracted_arabic.txt"
+    extracted_ar_path.write_text(raw_text, encoding="utf-8")
+    print(f"       Extracted Arabic Transcript (.txt): {extracted_ar_path.name}")
+
+    # 5. Save Output Book Files
+    print(f"\n[3/3] Saving translated book deliverables & summary report...")
     
     # German Output
     if target_mode in ("de", "both"):
@@ -177,6 +182,37 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
             md_lines.append("---\n")
         dual_md_path.write_text("\n".join(md_lines), encoding="utf-8")
         print(f"       Tri-Lingual Book (.md): {dual_md_path.name}")
+
+    # 6. Save Markdown Summary Report
+    summary_report_path = book_output_dir / f"{base_name}_summary.md"
+    from datetime import datetime
+    report_md = f"""# 📚 Book Translation & Transcript Report
+
+- **Source Book**: `{book_path.name}`
+- **Source Format**: `{book_path.suffix.upper()}`
+- **Processed At**: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`
+- **Total Paragraph Chunks**: `{len(translated_segments)}`
+- **Total Raw Characters**: `{len(raw_text):,}`
+
+---
+
+## 📦 Generated Book Files
+
+1. **📄 Extracted Arabic Text Transcript**: [`{extracted_ar_path.name}`](file://{extracted_ar_path.absolute()})
+2. **📖 German Book (.txt)**: [`{base_name}_translated_de.txt`](file://{(book_output_dir / f'{base_name}_translated_de.txt').absolute()})
+3. **📖 English Book (.txt)**: [`{base_name}_translated_en.txt`](file://{(book_output_dir / f'{base_name}_translated_en.txt').absolute()})
+4. **📖 Tri-Lingual Book (.md)**: [`{base_name}_dual_ar_de_en.md`](file://{(book_output_dir / f'{base_name}_dual_ar_de_en.md').absolute()})
+
+---
+
+## 🤖 AI Engine Stack
+
+- **Extraction**: `pypdf` / `python-docx` / UTF-8 Text Engine
+- **Primary AI LLM**: `Qwen2.5-14B-Instruct-4bit` (MLX Metal GPU)
+- **Translation Strategy**: Multi-Pass Agentic Self-Refinement (Draft -> Critique & Refine)
+"""
+    summary_report_path.write_text(report_md, encoding="utf-8")
+    print(f"       Markdown Summary Report: {summary_report_path.name}")
 
     print(f"\n{'='*60}")
     print(f"  🎉 Book Translation Complete! Output files saved in '{book_output_dir}/'")

@@ -23,7 +23,7 @@ os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 os.environ["PYTORCH_MPS_LOW_WATERMARK_RATIO"] = "0.0"
-os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.2"
+os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
 os.environ["MLX_METAL_JIT"] = "1"
 
 try:

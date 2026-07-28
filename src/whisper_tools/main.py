@@ -56,17 +56,19 @@ from deep_translator import GoogleTranslator
 from dotenv import load_dotenv
 
 try:
-    from local_translation import (
+    from whisper_tools.translation import (
         translate_segments,
         unload_local_models,
         verify_translations_with_report,
         verify_transcription_with_llm,
     )
 except ImportError:
-    translate_segments = None
-    unload_local_models = None
-    verify_translations_with_report = None
-    verify_transcription_with_llm = None
+    from .translation import (
+        translate_segments,
+        unload_local_models,
+        verify_translations_with_report,
+        verify_transcription_with_llm,
+    )
 
 # ─── Language Detection ───────────────────────────────────────────
 
@@ -661,7 +663,10 @@ def main():
             book_file_path = books_dir / args.url
 
     if book_file_path and book_file_path.exists():
-        from book_translation import translate_book_interactive
+        try:
+            from whisper_tools.book_translation import translate_book_interactive
+        except ImportError:
+            from .book_translation import translate_book_interactive
         output_dir = Path(args.output_dir)
         translate_book_interactive(book_file_path, output_dir, translate_segments, args)
         return

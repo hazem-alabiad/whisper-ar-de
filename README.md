@@ -6,17 +6,17 @@ Local Apple Silicon GPU pipeline for downloading, transcribing, translating, ver
 
 ## 🎬 1. How to Translate YouTube Videos (Online Link)
 
-Pass the **YouTube URL directly** to `main.py`. The tool will automatically download the video, transcribe audio in your source language with `mlx-whisper`, translate into target languages, and burn hard/soft subtitles onto the compressed output video.
+You can run the pipeline directly via `uv run whisper-tools` (or using `uv run python -m whisper_tools.main` in development mode). Pass the **YouTube URL directly**. The tool will automatically download the video, transcribe audio in your source language with `mlx-whisper`, translate into target languages, and burn hard/soft subtitles onto the compressed output video.
 
 ```bash
 # Basic YouTube Translation (Defaults: --source-lang ar --target-lang de,en)
-uv run python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID"
+uv run whisper-tools "https://www.youtube.com/watch?v=YOUR_VIDEO_ID"
 
 # Translate German audio to Arabic and English
-uv run python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --source-lang de --target-lang ar,en
+uv run whisper-tools "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --source-lang de --target-lang ar,en
 
 # Specify download quality preset upfront (1=Low, 2=Medium, 3=High, 4=Best)
-uv run python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --quality 2
+uv run whisper-tools "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --quality 2
 ```
 
 ---
@@ -27,10 +27,10 @@ To translate a book, place or copy your book file (`.pdf`, `.docx`, `.txt`, `.md
 
 ```bash
 # Option A: Translate interactively
-uv run python main.py --book my_book.pdf
+uv run whisper-tools --book my_book.pdf
 
 # Option B: Run via CLI flags (e.g., German to Arabic)
-uv run python main.py --book my_book.docx --source-lang de --target-lang ar
+uv run whisper-tools --book my_book.docx --source-lang de --target-lang ar
 ```
 
 ### Interactive Terminal Flow for Books
@@ -64,5 +64,5 @@ To prevent system-wide lag and WindowServer freezes on macOS, resource constrain
 If you want to bypass local neural models completely to save battery or keep your local GPU free, pass the `--no-local-translate` flag. This runs translations in parallel (`max_workers=3`) using the cloud-based Google Translate API.
 
 ```bash
-uv run python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --no-local-translate
+uv run whisper-tools "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --no-local-translate
 ```

@@ -50,7 +50,7 @@ try:
 except ImportError:
     raise ImportError("Please install transformers and sentencepiece: pip install transformers sentencepiece")
 
-_MODEL_CACHE_DIR = Path(__file__).parent / "model_cache"
+_MODEL_CACHE_DIR = Path(__file__).parent.parent.parent / "model_cache"
 _MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 _MLX_MODEL_DIR = _MODEL_CACHE_DIR / "mlx"

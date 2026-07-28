@@ -1320,7 +1320,7 @@ wheels = [
 [[package]]
 name = "whisper-tools"
 version = "1.0.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "deep-translator" },
     { name = "dotenv" },

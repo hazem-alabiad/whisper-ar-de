@@ -81,6 +81,7 @@ Select Target Translation Language(s):
 - **`<book>_translated_<lang>.epub`**: Digital EPUB e-book with table of contents for Apple Books, Kindle, and Kobo.
 - **`<book>_translated_<lang>.docx` / `.txt`**: Microsoft Word & plain text translation documents.
 - **`<book>_dual_<source>_<targets>.md` / `.pdf` / `.epub`**: Side-by-side multi-lingual edition.
+- **`<book>_editorial_audit_<lang>.md`**: Full-book AI Editorial Audit Report logging every revised segment, initial draft, refined text, and editorial reason.
 
 ---
 

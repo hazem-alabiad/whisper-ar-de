@@ -220,6 +220,25 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     print(f"\n[2/3] Translating book paragraphs using 3-Tier AI Engine...")
     translated_segments = translate_segments_fn(segments, book_output_dir, args, source_lang=source_lang, target_langs=target_langs)
     
+    # 3.5 Full-Book AI Editorial Audit & Refinement Pass
+    audit_reports = []
+    if getattr(args, "local_translate", True):
+        try:
+            try:
+                from whisper_tools.book_editorial import audit_and_refine_full_book, write_editorial_audit_report
+            except ImportError:
+                from .book_editorial import audit_and_refine_full_book, write_editorial_audit_report
+
+            llm_model_id = getattr(args, "mlx_model", "mlx-community/Qwen2.5-7B-Instruct-4bit")
+            for target in target_langs:
+                translated_segments, audit_entries = audit_and_refine_full_book(
+                    raw_text, translated_segments, source_lang, target, llm_model_id
+                )
+                rep_path = write_editorial_audit_report(audit_entries, book_output_dir, base_name, target, len(translated_segments))
+                audit_reports.append(f"Editorial Audit Report ({target.upper()}): [`{rep_path.name}`](file://{rep_path.absolute()})")
+        except Exception as e:
+            print(f"       [NOTE] AI Editorial Audit pass skipped: {e}")
+
     # 4. Save Extracted Raw Text Transcript File
     extracted_src_path = book_output_dir / f"{base_name}_extracted_{source_lang}.txt"
     extracted_src_path.write_text(raw_text, encoding="utf-8")

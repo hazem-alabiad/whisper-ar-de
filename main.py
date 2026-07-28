@@ -876,9 +876,13 @@ def parse_temperature(val):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="YouTube Arabic → German → English: SRT subtitles + compressed video."
+        description="YouTube & Book Arabic → German / English Dual Translation Pipeline."
     )
-    parser.add_argument("url", type=str, help="YouTube video URL")
+    parser.add_argument("url", type=str, nargs="?", default=None, help="YouTube video URL or path to book file")
+    parser.add_argument(
+        "--book", type=str, default=None,
+        help="Path to book file (.txt, .pdf, .docx, .md) to translate interactively",
+    )
     parser.add_argument(
         "--model", type=str, default="large-v3-turbo-q4",
         help="Whisper model size (e.g. large-v3-turbo-q4, medium, large-v3-turbo, large-v3-4bit) or HF repo (default: large-v3-turbo-q4)",
@@ -943,6 +947,26 @@ def parse_args():
 def main():
     load_dotenv()
     args = parse_args()
+
+    # Check for Book Translation Mode (--book argument or positional file path)
+    book_file_path = None
+    if args.book:
+        book_file_path = Path(args.book)
+    elif args.url and Path(args.url).is_file():
+        book_file_path = Path(args.url)
+
+    if book_file_path and book_file_path.exists():
+        from book_translation import translate_book_interactive
+        output_dir = Path(args.output_dir)
+        translate_book_interactive(book_file_path, output_dir, translate_segments, args)
+        return
+
+    if not args.url:
+        print("\n  [ERROR] Please provide a YouTube video URL or a book file path (.txt, .pdf, .docx, .md).")
+        print("  Usage for YouTube: python main.py <youtube_url>")
+        print("  Usage for Books:   python main.py --book <path_to_book>")
+        return
+
     # Enforce maximum target size of 100 MB
     if args.target_size > 100:
         print(f"[WARNING] Target size capped at 100 MB (requested {args.target_size} MB)")

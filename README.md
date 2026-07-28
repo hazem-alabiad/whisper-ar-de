@@ -92,6 +92,15 @@ To prevent system-wide lag and WindowServer freezes on macOS, resource constrain
 - **Active Memory Recycling**: Whisper and translation models are actively unloaded from Unified Memory at stage boundaries.
 - **Metal Cache Limits**: MLX cache size is programmatically capped at 2GB.
 
+### 🔄 Automated Live Progress & Speed-Up Resumption
+
+Both YouTube video and book pipelines continually back up translation progress segment-by-segment into `translation_progress.json`.
+
+If a pipeline is interrupted or re-run:
+- `whisper-tools` automatically detects existing backups.
+- You are prompted: `Resume from existing backup to speed up execution? (y/n, default: y)`
+- Pressing **Enter (y)** instantly loads completed segments and resumes execution from where it left off, saving significant time and GPU RAM.
+
 ### Running with Cloud-Only Fallback (Low Resources)
 
 If you want to bypass local neural models completely to save battery or keep your local GPU free, pass the `--no-local-translate` flag. This runs translations in parallel (`max_workers=3`) using the cloud-based Google Translate API.

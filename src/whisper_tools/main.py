@@ -1090,12 +1090,29 @@ def main():
             verify_translations_with_report(segments, output_dir, args, source_lang=source_lang, target_langs=target_langs)
     else:
         print(f"\n[3/6] Translating to {', '.join(t.upper() for t in target_langs)}...")
+        progress_file = output_dir / "translation_progress.json"
+        temp_json = output_dir / "translation_temp.json"
+        if progress_file.exists() and not needs_retranslate:
+            try:
+                import json
+                prog_data = json.loads(progress_file.read_text(encoding="utf-8"))
+                completed_cnt = prog_data.get("completed_count", 0)
+                print(f"  [FOUND PREVIOUS BACKUP] Found translation progress for video '{base_name}' ({completed_cnt} segments completed).")
+                res_ans = input("  Resume from existing backup to speed up execution? (y/n, default: y): ").strip().lower()
+                if res_ans == "n":
+                    progress_file.unlink(missing_ok=True)
+                    if temp_json.exists():
+                        temp_json.unlink(missing_ok=True)
+                    print("  [INFO] Cleared previous backup. Starting fresh video translation from scratch!\n")
+                else:
+                    print("  [INFO] Resuming from existing backup to speed up video translation!\n")
+            except Exception:
+                pass
+
         if needs_retranslate:
             print("  [INFO] Re-translating due to script validation warning")
-            # Clear progress to force re-translation
-            progress_file = output_dir / "translation_progress.json"
             if progress_file.exists():
-                progress_file.unlink()
+                progress_file.unlink(missing_ok=True)
 
         if translate_segments is not None:
             segments = translate_segments(segments, output_dir, args, source_lang=source_lang, target_langs=target_langs)

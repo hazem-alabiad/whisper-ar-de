@@ -119,6 +119,26 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     print(f"  📁 Output Directory  : {book_output_dir}")
     print(f"{'='*60}\n")
     
+    # Check for existing live backup / progress
+    progress_file = book_output_dir / "translation_progress.json"
+    temp_json = book_output_dir / "translation_temp.json"
+    if progress_file.exists():
+        try:
+            import json
+            prog_data = json.loads(progress_file.read_text(encoding="utf-8"))
+            completed_cnt = prog_data.get("completed_count", 0)
+            print(f"  [FOUND PREVIOUS BACKUP] Found translation progress for '{base_name}' ({completed_cnt} segments completed).")
+            res_ans = input("  Resume from existing backup to speed up execution? (y/n, default: y): ").strip().lower()
+            if res_ans == "n":
+                progress_file.unlink(missing_ok=True)
+                if temp_json.exists():
+                    temp_json.unlink(missing_ok=True)
+                print("  [INFO] Cleared previous backup. Starting fresh translation from scratch!\n")
+            else:
+                print("  [INFO] Resuming from existing backup to speed up translation!\n")
+        except Exception:
+            pass
+    
     # 2. Extract & Chunk Text
     print(f"\n[1/3] Extracting text from {book_path.name}...")
     raw_text = extract_text_from_book(book_path)

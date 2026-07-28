@@ -104,7 +104,10 @@ def load_mlx_model(repo_id: str = _DEFAULT_MLX_MODEL):
     try:
         import mlx.core as mx
         # Set cache limit to 2GB to prevent memory leak/unbounded cache growth
-        mx.metal.set_cache_limit(2 * 1024 * 1024 * 1024)
+        if hasattr(mx, "set_cache_limit"):
+            mx.set_cache_limit(2 * 1024 * 1024 * 1024)
+        elif hasattr(mx, "metal") and hasattr(mx.metal, "set_cache_limit"):
+            mx.metal.set_cache_limit(2 * 1024 * 1024 * 1024)
     except Exception:
         pass
 

@@ -763,7 +763,10 @@ def main():
     load_dotenv()
     try:
         import mlx.core as mx
-        mx.metal.set_cache_limit(2 * 1024 * 1024 * 1024)  # Cap MLX Metal GPU cache at 2GB globally
+        if hasattr(mx, "set_cache_limit"):
+            mx.set_cache_limit(2 * 1024 * 1024 * 1024)
+        elif hasattr(mx, "metal") and hasattr(mx.metal, "set_cache_limit"):
+            mx.metal.set_cache_limit(2 * 1024 * 1024 * 1024)
     except Exception:
         pass
 
@@ -835,9 +838,18 @@ def main():
     # If not skipping, continue normal pipeline (base_name will be set later)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    source_lang_code = getattr(args, "source_lang", "ar").lower()
+    target_langs_codes = [l.strip().lower() for l in getattr(args, "target_lang", "de,en").split(",") if l.strip()]
+    backend_str = "Local MLX / MarianMT" if getattr(args, "local_translate", True) else "Google Translate API"
+
     print(f"\n{'='*60}")
-    print("  YouTube → Arabic/German/English Pipeline")
-    print(f"  URL: {args.url}")
+    print("  🚀 STARTING VIDEO TRANSLATION PIPELINE")
+    print(f"{'='*60}")
+    print(f"  🎬 Target Video URL  : {args.url}")
+    print(f"  🌐 Source Language   : {source_lang_code.upper()}")
+    print(f"  🎯 Target Languages  : {', '.join(t.upper() for t in target_langs_codes)}")
+    print(f"  🤖 Model Backend     : {backend_str}")
+    print(f"  🎙️ Whisper ASR Model  : {args.model}")
     print(f"{'='*60}\n")
 
     # Step 0: Name & Detect existing output (Auto-detect from any existing pipeline file)

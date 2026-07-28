@@ -6,31 +6,36 @@ Local Apple Silicon GPU pipeline for downloading, transcribing, translating, ver
 
 ## 🎬 1. How to Translate YouTube Videos (Online Link)
 
-You can run the pipeline directly via `uv run whisper-tools` (or using `uv run python -m whisper_tools.main` in development mode). Pass the **YouTube URL directly**. The tool will automatically download the video, transcribe audio in your source language with `mlx-whisper`, translate into target languages, and burn hard/soft subtitles onto the compressed output video.
+You can run the pipeline directly via `uv run whisper-tools` or `python main.py`. Pass the **YouTube URL directly**. The tool will automatically download the video, transcribe audio in your source language with `mlx-whisper`, translate into target languages, and burn hard/soft subtitles onto the compressed output video.
 
 ```bash
 # Basic YouTube Translation (Defaults: --source-lang ar --target-lang de,en)
+python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID"
+# Or using uv run whisper-tools:
 uv run whisper-tools "https://www.youtube.com/watch?v=YOUR_VIDEO_ID"
 
 # Translate German audio to Arabic and English
-uv run whisper-tools "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --source-lang de --target-lang ar,en
+python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --source-lang de --target-lang ar,en
 
 # Specify download quality preset upfront (1=Low, 2=Medium, 3=High, 4=Best)
-uv run whisper-tools "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --quality 2
+python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --quality 2
 ```
 
 ---
 
 ## 📚 2. How to Translate Books (Upload / Local File Path)
 
-To translate a book, place or copy your book file (`.pdf`, `.docx`, `.txt`, `.md`) inside your workspace folder (e.g. `/Users/hazem/ws/whisper-tools/my_book.pdf`) or provide its absolute path.
+To translate a book, place or copy your book file (`.pdf`, `.docx`, `.txt`, `.md`) inside your workspace folder or pass it as a positional argument.
 
 ```bash
-# Option A: Translate interactively
-uv run whisper-tools --book my_book.pdf
+# Option A: Passing positional argument directly
+python main.py my_book.pdf
 
-# Option B: Run via CLI flags (e.g., German to Arabic)
-uv run whisper-tools --book my_book.docx --source-lang de --target-lang ar
+# Option B: Using the --book flag
+python main.py --book my_book.pdf
+
+# Option C: Specifying multi-target languages (Arabic to German & English)
+python main.py my_book.pdf --source-lang ar --target-lang de,en
 ```
 
 ### Interactive Terminal Flow for Books

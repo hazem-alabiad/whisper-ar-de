@@ -86,11 +86,6 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     book_output_dir = output_dir / "books" / base_name
     book_output_dir.mkdir(parents=True, exist_ok=True)
     
-    print(f"\n{'='*60}")
-    print(f"  📚 Book Translation Mode: {book_path.name}")
-    print(f"  📁 Dedicated Book Output Directory: {book_output_dir}")
-    print(f"{'='*60}")
-    
     source_lang = getattr(args, "source_lang", "ar").lower()
     target_langs_str = getattr(args, "target_lang", "de,en").lower()
 
@@ -103,15 +98,26 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
         print("    [1] German (Deutsch)")
         print("    [2] English")
         print("    [3] Both German & English (Dual Translation)")
-        lang_choice = input("\n  Enter choice [1-3] (default: 3 Both): ").strip()
+        print("    [4] Custom languages (comma-separated, e.g. de,en,fr)")
+        lang_choice = input("\n  Enter choice [1-4] (default: 3 Both): ").strip()
         if lang_choice == "1":
             target_langs = ["de"]
         elif lang_choice == "2":
             target_langs = ["en"]
+        elif lang_choice == "4":
+            custom_in = input("  Enter comma-separated target language codes (e.g. de,en,es): ").strip().lower()
+            target_langs = [l.strip() for l in custom_in.split(",") if l.strip()] if custom_in else ["de", "en"]
         else:
             target_langs = ["de", "en"]
             
-    print(f"  Selected translation: {source_lang.upper()} → {', '.join(t.upper() for t in target_langs)}")
+    print(f"\n{'='*60}")
+    print("  🚀 STARTING BOOK TRANSLATION PIPELINE")
+    print(f"{'='*60}")
+    print(f"  📖 Book File Name    : {book_path.name}")
+    print(f"  🌐 Source Language   : {source_lang.upper()}")
+    print(f"  🎯 Target Languages  : {', '.join(t.upper() for t in target_langs)}")
+    print(f"  📁 Output Directory  : {book_output_dir}")
+    print(f"{'='*60}\n")
     
     # 2. Extract & Chunk Text
     print(f"\n[1/3] Extracting text from {book_path.name}...")

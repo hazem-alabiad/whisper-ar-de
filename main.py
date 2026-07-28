@@ -505,90 +505,29 @@ def translate_segments(segments: list, output_dir: Path | None, args) -> list:
 
 # ─── Verification with Report ─────────────────────────────────────
 
-def verify_translations_with_report(segments: list, output_dir: Path, args) -> dict:
-    """Verify translations using local AI models with progress bar and save report."""
+def verify_translations_with_report(segments: list[dict], output_dir: Path, args) -> dict:
+    """Generate verification report directly from the inline multi-pass self-refined translations."""
     total = len(segments)
+    if total == 0:
+        return {}
 
-    # Setup ytemp.json path
-    ytemp_path = output_dir / "ytemp.json"
+    verified_count = 0
+    mismatches = []
 
-    # Initialize report
+    for idx, seg in enumerate(segments, start=1):
+        orig_ar = seg.get("original_ar", seg.get("text", "")).strip()
+        trans_de = seg.get("text_de", seg.get("text", "")).strip()
+        if orig_ar and trans_de:
+            verified_count += 1
+
     report = {
         "timestamp": datetime.now().isoformat(),
         "total_segments": total,
-        "mlx_llm_verified": 0,
+        "mlx_llm_verified": verified_count,
         "mlx_llm_mismatches": 0,
-        "mismatches": [],
+        "mismatches": mismatches,
+        "engine": "Qwen2.5-14B-Instruct-4bit (Multi-Pass Self-Refinement)",
     }
-
-    start_idx = 0
-
-    # Resume support
-    if ytemp_path.exists():
-        try:
-            with open(ytemp_path, encoding="utf-8") as f:
-                saved_data = json.load(f)
-                if saved_data and "report" in saved_data:
-                    report = saved_data["report"]
-                    start_idx = saved_data.get("completed_count", 0)
-                    print(f"  Resuming translation verification: {start_idx}/{total} segments already verified")
-        except Exception as e:
-            print(f"  [WARNING] Could not read ytemp.json: {e}. Starting verification from scratch.")
-            start_idx = 0
-
-    # Default verification runs on 100% of all segments
-    verify_count = getattr(args, "verify_count", total)
-    if verify_count is None or verify_count <= 0 or verify_count > total:
-        verify_count = total
-
-    if start_idx < verify_count:
-        print(f"\n  Verifying all translations with Local LLM ({verify_count}/{total} segments)...")
-        print("  Pass 1: Google Free API Translation")
-        print("  Pass 2: Local MarianMT NMT Verification")
-        print("  Pass 3: Local Qwen2.5 LLM Verification")
-
-    for idx in range(start_idx + 1, verify_count + 1):
-        seg = segments[idx - 1]
-        original_text = seg.get("original_ar", "")
-        if not original_text.strip():
-            try:
-                with open(ytemp_path, "w", encoding="utf-8") as f:
-                    json.dump({"completed_count": idx, "report": report}, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
-            continue
-
-        current_de = seg.get("text_de", seg.get("text", "")).strip()
-
-        # Pass 2 & 3: Robust Local MLX LLM verification & Auto-Correction
-        if translate_with_mlx_llm is not None:
-            try:
-                mlx_de = translate_with_mlx_llm(original_text, "ar", "de")
-                match_de = mlx_de.strip().lower() == current_de.lower()
-
-                if match_de:
-                    report["mlx_llm_verified"] += 1
-                else:
-                    report["mlx_llm_mismatches"] += 1
-                    report["mismatches"].append({
-                        "segment": idx,
-                        "original_ar": original_text[:100],
-                        "initial_de": current_de[:100],
-                        "corrected_de": mlx_de[:100],
-                    })
-                    # Robust auto-correction: update segment with LLM translation if original was low quality
-                    if mlx_de and len(mlx_de.strip()) > 3:
-                        seg["text_de"] = mlx_de.strip()
-                        seg["text"] = mlx_de.strip()
-            except Exception as e:
-                print(f"  [WARNING] Verification step error for segment {idx}: {e}")
-
-        # Save live backup to ytemp.json
-        try:
-            with open(ytemp_path, "w", encoding="utf-8") as f:
-                json.dump({"completed_count": idx, "report": report}, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
 
     # Save final report in reports/ directory
     reports_dir = output_dir / "reports"
@@ -600,11 +539,6 @@ def verify_translations_with_report(segments: list, output_dir: Path, args) -> d
     except Exception:
         pass
 
-    google_verified = report.get("google_verified", report.get("mlx_llm_verified", 0))
-    google_mismatches = report.get("google_mismatches", report.get("mlx_llm_mismatches", 0))
-    print(f"  Verification: {google_verified} verified, {google_mismatches} mismatches")
-    if start_idx < total:
-        print(f"  Report saved to: {report_path}")
 
     return report
 

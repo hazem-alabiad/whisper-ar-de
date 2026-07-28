@@ -5,7 +5,8 @@
 > This entire application — from local Apple Silicon Metal GPU memory management, dynamic multi-lingual translation pipelines, interactive terminal UI launchers, to book PDF/DOCX parsing — was architected, refactored, and crafted using state-of-the-art **Agentic AI LLM pair programming**.
 >
 > - ⚡ **Apple Silicon Metal Acceleration**: Programmatic GPU cache management & memory recycling.
-> - 🧠 **Dual AI Stack**: `mlx-whisper` ASR + `Qwen2.5` / `MarianMT` Neural Translation.
+> - 🧠 **Dual AI Stack**: `mlx-whisper` ASR + `Qwen2.5-7B-Instruct-4bit` (Default) / `Qwen2.5-14B` Neural Translation.
+> - 🔄 **Dual-LLM 2-Pass Architecture**: Action Pass (Initial Neural Translation) ➔ Verifier Pass (AI Quality & Nuance Refinement).
 > - 🌐 **Universal Language Engine**: Dynamic translation between arbitrary language pairs.
 
 Local Apple Silicon GPU pipeline for downloading, transcribing, translating, verifying, and burning subtitles for YouTube videos & Books. Supports any source and target translation direction dynamically.

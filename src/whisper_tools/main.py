@@ -49,6 +49,7 @@ os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["PYTORCH_MPS_LOW_WATERMARK_RATIO"] = "0.0"
 os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.2"
 
 import mlx_whisper
@@ -702,13 +703,16 @@ def run_interactive_launcher(args):
             else:
                 args.local_translate = True
                 print("\n  Select Local Translation LLM Model:")
-                print("    [1] Qwen2.5-3B-Instruct-8bit (Fast 8-bit quantized, ~3.5GB RAM - default)")
-                print("    [2] Qwen2.5-7B-Instruct-4bit (Higher accuracy 4-bit, ~4.5GB RAM)")
-                llm_choice = input("  Enter LLM model choice [1-2] (default: 1): ").strip()
+                print("    [1] Qwen2.5-7B-Instruct-4bit (~4.3GB RAM - High Accuracy Sweet Spot, default)")
+                print("    [2] Qwen2.5-14B-Instruct-4bit (~9.2GB RAM - Ultimate Quality)")
+                print("    [3] Qwen2.5-3B-Instruct-8bit (~3.5GB RAM - Fast Lightweight)")
+                llm_choice = input("  Enter LLM model choice [1-3] (default: 1): ").strip()
                 if llm_choice == "2":
-                    args.mlx_model = "mlx-community/Qwen2.5-7B-Instruct-4bit"
-                else:
+                    args.mlx_model = "mlx-community/Qwen2.5-14B-Instruct-4bit"
+                elif llm_choice == "3":
                     args.mlx_model = "mlx-community/Qwen2.5-3B-Instruct-8bit"
+                else:
+                    args.mlx_model = "mlx-community/Qwen2.5-7B-Instruct-4bit"
                 
             return args
             
@@ -748,13 +752,16 @@ def run_interactive_launcher(args):
             else:
                 args.local_translate = True
                 print("\n  Select Local Translation LLM Model:")
-                print("    [1] Qwen2.5-3B-Instruct-8bit (Fast 8-bit quantized, ~3.5GB RAM - default)")
-                print("    [2] Qwen2.5-7B-Instruct-4bit (Higher accuracy 4-bit, ~4.5GB RAM)")
-                llm_choice = input("  Enter LLM model choice [1-2] (default: 1): ").strip()
+                print("    [1] Qwen2.5-7B-Instruct-4bit (~4.3GB RAM - High Accuracy Sweet Spot, default)")
+                print("    [2] Qwen2.5-14B-Instruct-4bit (~9.2GB RAM - Ultimate Quality)")
+                print("    [3] Qwen2.5-3B-Instruct-8bit (~3.5GB RAM - Fast Lightweight)")
+                llm_choice = input("  Enter LLM model choice [1-3] (default: 1): ").strip()
                 if llm_choice == "2":
-                    args.mlx_model = "mlx-community/Qwen2.5-7B-Instruct-4bit"
-                else:
+                    args.mlx_model = "mlx-community/Qwen2.5-14B-Instruct-4bit"
+                elif llm_choice == "3":
                     args.mlx_model = "mlx-community/Qwen2.5-3B-Instruct-8bit"
+                else:
+                    args.mlx_model = "mlx-community/Qwen2.5-7B-Instruct-4bit"
                 
             return args
             
@@ -794,13 +801,16 @@ def run_interactive_launcher(args):
                 args.model = "large-v3-turbo-q4"
 
             print("\nSelect Local Translation LLM Model:")
-            print("  [1] Qwen2.5-3B-Instruct-8bit (default)")
-            print("  [2] Qwen2.5-7B-Instruct-4bit")
-            l_choice = input("Enter choice [1-2] (default: 1): ").strip()
+            print("  [1] Qwen2.5-7B-Instruct-4bit (~4.3GB RAM - High Accuracy Sweet Spot, default)")
+            print("  [2] Qwen2.5-14B-Instruct-4bit (~9.2GB RAM - Ultimate Quality)")
+            print("  [3] Qwen2.5-3B-Instruct-8bit (~3.5GB RAM - Fast Lightweight)")
+            l_choice = input("Enter choice [1-3] (default: 1): ").strip()
             if l_choice == "2":
-                args.mlx_model = "mlx-community/Qwen2.5-7B-Instruct-4bit"
-            else:
+                args.mlx_model = "mlx-community/Qwen2.5-14B-Instruct-4bit"
+            elif l_choice == "3":
                 args.mlx_model = "mlx-community/Qwen2.5-3B-Instruct-8bit"
+            else:
+                args.mlx_model = "mlx-community/Qwen2.5-7B-Instruct-4bit"
 
             print("\n  Starting pre-download of selected models...")
             target_langs_list = [l.strip() for l in getattr(args, "target_lang", "de,en").split(",") if l.strip()]

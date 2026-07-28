@@ -22,7 +22,8 @@ os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
-os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.4"
+os.environ["PYTORCH_MPS_LOW_WATERMARK_RATIO"] = "0.0"
+os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.2"
 os.environ["MLX_METAL_JIT"] = "1"
 
 try:
@@ -56,7 +57,7 @@ _MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _MLX_MODEL_DIR = _MODEL_CACHE_DIR / "mlx"
 _MLX_MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-_DEFAULT_MLX_MODEL = "mlx-community/Qwen2.5-3B-Instruct-8bit"
+_DEFAULT_MLX_MODEL = "mlx-community/Qwen2.5-7B-Instruct-4bit"
 _MLX_MODEL_CACHE = {}
 
 def unload_local_models():
@@ -285,6 +286,44 @@ def double_check_translations_locally(segments: list[dict], target_lang: str = "
     return results
 
 
+def verify_and_refine_translation_pass(source_text: str, draft_text: str, source_lang: str, target_lang: str, model_id: str = _DEFAULT_MLX_MODEL) -> str:
+    """Second-pass AI verifier LLM: cross-verifies translation draft against original source text, fixing grammatical and idiomatic flaws."""
+    if not draft_text or not draft_text.strip() or not source_text or not source_text.strip():
+        return draft_text
+
+    if not _MLX_AVAILABLE:
+        return draft_text
+
+    lang_names = {"ar": "Arabic", "de": "German", "en": "English", "fr": "French", "es": "Spanish"}
+    src_name = lang_names.get(source_lang.lower(), source_lang)
+    tgt_name = lang_names.get(target_lang.lower(), target_lang)
+
+    try:
+        model, tokenizer = load_mlx_model(model_id)
+
+        prompt = (
+            f"You are an expert bilingual quality verifier translating from {src_name} to {tgt_name}.\n"
+            f"Review the draft translation below against the original {src_name} text.\n"
+            f"Correct any subtle translation inaccuracies, missing words, or un-idiomatic phrasing in {tgt_name}.\n"
+            f"Output ONLY the final, polished {tgt_name} translation without explanation or quotes.\n\n"
+            f"Original {src_name}: {source_text}\n"
+            f"Draft {tgt_name}: {draft_text}\n"
+            f"Polished {tgt_name}:"
+        )
+
+        if hasattr(tokenizer, "apply_chat_template"):
+            messages = [{"role": "user", "content": prompt}]
+            formatted_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        else:
+            formatted_prompt = prompt
+
+        response = mlx_generate(model, tokenizer, prompt=formatted_prompt, max_tokens=512, verbose=False)
+        polished = response.strip().strip('"').strip("'")
+        return polished if polished else draft_text
+    except Exception:
+        return draft_text
+
+
 def verify_transcription_with_llm(text: str, source_lang: str = "ar", model_id: str = _DEFAULT_MLX_MODEL) -> str:
     """Proofread and double-check audio transcription using local MLX LLM."""
     if not text or not text.strip():
@@ -505,7 +544,12 @@ def translate_segments(segments: list, output_dir: Path | None, args, source_lan
             text_to_trans = seg['text'].strip()
             if text_to_trans:
                 for target in target_langs:
-                    seg[f"text_{target}"] = translate_segment(text_to_trans, source_lang, target, backend)
+                    draft = translate_segment(text_to_trans, source_lang, target, backend)
+                    if is_local:
+                        verified = verify_and_refine_translation_pass(text_to_trans, draft, source_lang, target)
+                        seg[f"text_{target}"] = verified
+                    else:
+                        seg[f"text_{target}"] = draft
 
         # Mark as translated
         for i in range(batch_start, batch_end):

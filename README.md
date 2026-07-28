@@ -12,38 +12,55 @@ Local Apple Silicon GPU pipeline for downloading, transcribing, translating, ver
 
 ---
 
-## 🎬 1. How to Translate YouTube Videos (Online Link)
+## 🚀 Quick Start & Running Instructions
 
-You can run the pipeline directly via `uv run whisper-tools` or `python main.py`. Pass the **YouTube URL directly**. The tool will automatically download the video, transcribe audio in your source language with `mlx-whisper`, translate into target languages, and burn hard/soft subtitles onto the compressed output video.
+### 1. Interactive Terminal Launcher (Recommended)
+
+Simply execute `python main.py` or `uv run whisper-tools` without arguments to open the interactive configuration menu:
 
 ```bash
-# Basic YouTube Translation (Defaults: --source-lang ar --target-lang de,en)
-python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID"
-# Or using uv run whisper-tools:
-uv run whisper-tools "https://www.youtube.com/watch?v=YOUR_VIDEO_ID"
+# Launch interactive terminal mode
+python main.py
 
-# Translate German audio to Arabic and English
-python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --source-lang de --target-lang ar,en
-
-# Specify download quality preset upfront (1=Low, 2=Medium, 3=High, 4=Best)
-python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --quality 2
+# Or via uv script runner
+uv run whisper-tools
 ```
+
+#### Interactive Menu Options:
+1. **🎬 Translate YouTube Video**: Step-by-step guidance for video URL, source/target languages, download quality presets, Whisper ASR model size (`base`, `small`, `medium`, `large-v3-turbo-q4`), and Local LLM model choice.
+2. **📚 Translate Local Book**: Automatically scans your `books/` workspace folder, lets you select a book by number or path, select target languages, and pick LLM models.
+3. **📖 Flags & Options Guide**: Display an in-terminal cheat sheet detailing all available CLI parameters.
+4. **📥 Interactively Select & Pre-download Models**: Pre-warm model caches into `model_cache/` upfront for offline/fast usage.
 
 ---
 
-## 📚 2. How to Translate Books (Upload / Local File Path)
+### 2. Direct Command Line (CLI) Usage
 
-To translate a book, place or copy your book file (`.pdf`, `.docx`, `.txt`, `.md`) inside your workspace folder or pass it as a positional argument.
-
+#### 🎬 YouTube Video Translation
 ```bash
-# Option A: Passing positional argument directly
+# Basic YouTube Translation (Arabic -> German & English)
+python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID"
+
+# Specify custom source & target languages (e.g. German -> Arabic & English)
+python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --source-lang de --target-lang ar,en
+
+# Select specific Whisper model size (base, small, medium, large-v3-turbo-q4)
+python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --model medium
+```
+
+#### 📚 Book Translation (.pdf, .docx, .txt, .md)
+```bash
+# Translate book passing positional file path directly
 python main.py my_book.pdf
 
-# Option B: Using the --book flag
-python main.py --book my_book.pdf
-
-# Option C: Specifying multi-target languages (Arabic to German & English)
+# Translate book with explicit target languages (Arabic -> German & English)
 python main.py my_book.pdf --source-lang ar --target-lang de,en
+```
+
+#### ⚡ Low Resource / Cloud-Only Fallback
+```bash
+# Bypass local GPU models and use parallel cloud Google Translate API
+python main.py "https://www.youtube.com/watch?v=YOUR_VIDEO_ID" --no-local-translate
 ```
 
 ### Interactive Terminal Flow for Books

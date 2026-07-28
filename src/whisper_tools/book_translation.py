@@ -10,9 +10,12 @@ Outputs:
   - Full structured JSON backup
 """
 
-import json
+import logging
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def extract_text_from_book(file_path: Path) -> str:
@@ -47,7 +50,7 @@ def extract_text_from_book(file_path: Path) -> str:
         raise ValueError(f"Unsupported book format: {ext}. Supported formats: .txt, .pdf, .docx, .md")
 
 
-def chunk_text_into_paragraphs(text: str, max_chunk_chars: int = 1000) -> List[Dict[str, Any]]:
+def chunk_text_into_paragraphs(text: str, max_chunk_chars: int = 1000) -> list[dict[str, Any]]:
     """Split book text into coherent paragraph segments for translation."""
     raw_paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
     
@@ -190,8 +193,8 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
                 print("  [INFO] Cleared previous backup. Starting fresh translation from scratch!\n")
             else:
                 print("  [INFO] Resuming from existing backup to speed up translation!\n")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not read resume progress file: %s", exc)
     
     # 2. Extract & Chunk Text
     print(f"\n[1/3] Extracting text from {book_path.name}...")
@@ -204,7 +207,7 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
         except ImportError:
             from .translation import verify_transcription_with_llm
             
-        print(f"       [AI Verification] Proofreading extracted book text for OCR/formatting fixes...")
+        print("       [AI Verification] Proofreading extracted book text for OCR/formatting fixes...")
         try:
             proofread_text = verify_transcription_with_llm(raw_text, source_lang=source_lang)
             if proofread_text and proofread_text.strip():
@@ -217,7 +220,7 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     print(f"       Extracted {len(segments)} paragraph chunks from book.")
     
     # 3. Translate Segments via Pipeline with dedicated directory for live JSON backups
-    print(f"\n[2/3] Translating book paragraphs using 3-Tier AI Engine...")
+    print("\n[2/3] Translating book paragraphs using 3-Tier AI Engine...")
     translated_segments = translate_segments_fn(segments, book_output_dir, args, source_lang=source_lang, target_langs=target_langs)
     
     # 3.5 Full-Book AI Editorial Audit & Refinement Pass
@@ -225,9 +228,15 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     if getattr(args, "local_translate", True):
         try:
             try:
-                from whisper_tools.book_editorial import audit_and_refine_full_book, write_editorial_audit_report
+                from whisper_tools.book_editorial import (
+                    audit_and_refine_full_book,
+                    write_editorial_audit_report,
+                )
             except ImportError:
-                from .book_editorial import audit_and_refine_full_book, write_editorial_audit_report
+                from .book_editorial import (
+                    audit_and_refine_full_book,
+                    write_editorial_audit_report,
+                )
 
             llm_model_id = getattr(args, "mlx_model", "mlx-community/Qwen2.5-7B-Instruct-4bit")
             for target in target_langs:
@@ -245,7 +254,7 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     print(f"       Extracted {source_lang.upper()} Transcript (.txt): {extracted_src_path.name}")
  
     # 5. Save Output Book Files
-    print(f"\n[3/3] Saving translated book deliverables & summary report...")
+    print("\n[3/3] Saving translated book deliverables & summary report...")
     
     # Save each target language txt/docx
     # Import e-book exporters
@@ -275,8 +284,8 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
             doc.save(str(docx_path))
             print(f"       {target.upper()} Book (.docx): {docx_path.name}")
             generated_files.append(f"{target.upper()} Book (.docx): [`{docx_path.name}`](file://{docx_path.absolute()})")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("DOCX export skipped: %s", exc)
 
         # 3. PDF E-Book (.pdf)
         pdf_path = book_output_dir / f"{base_name}_translated_{target}.pdf"
@@ -316,14 +325,13 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
 
     # 6. Save Markdown Summary Report
     summary_report_path = book_output_dir / f"{base_name}_summary.md"
-    from datetime import datetime
     
     files_list_md = "\n".join([f"{idx+1}. {item}" for idx, item in enumerate(generated_files)])
     report_md = f"""# 📚 Book Translation & Transcript Report
 
 - **Source Book**: `{book_path.name}`
 - **Source Format**: `{book_path.suffix.upper()}`
-- **Processed At**: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`
+- **Processed At**: `{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC`
 - **Total Paragraph Chunks**: `{len(translated_segments)}`
 - **Total Raw Characters**: `{len(raw_text):,}`
 

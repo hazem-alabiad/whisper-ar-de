@@ -5,25 +5,38 @@ auditing draft translations for fluency/accuracy, auto-correcting flaws,
 and logging all editorial revisions into a dedicated Markdown audit report.
 """
 
-from datetime import datetime
 import json
-from pathlib import Path
+import logging
 import re
-from typing import Any, Dict, List, Tuple
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 try:
-    from whisper_tools.translation import _DEFAULT_MLX_MODEL, _MLX_AVAILABLE, load_mlx_model, mlx_generate
+    from whisper_tools.translation import (
+        _DEFAULT_MLX_MODEL,
+        _MLX_AVAILABLE,
+        load_mlx_model,
+        mlx_generate,
+    )
 except ImportError:
-    from .translation import _DEFAULT_MLX_MODEL, _MLX_AVAILABLE, load_mlx_model, mlx_generate
+    from .translation import (
+        _DEFAULT_MLX_MODEL,
+        _MLX_AVAILABLE,
+        load_mlx_model,
+        mlx_generate,
+    )
 
 
 def audit_and_refine_full_book(
     raw_source_text: str,
-    segments: List[Dict[str, Any]],
+    segments: list[dict[str, Any]],
     source_lang: str,
     target_lang: str,
     model_id: str = _DEFAULT_MLX_MODEL,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Performs a full-book AI editorial review pass.
 
     Args:
@@ -60,8 +73,8 @@ def audit_and_refine_full_book(
     total_segs = len(segments)
 
     for idx, seg in enumerate(segments, start=1):
-        orig_text = seg.get("original_text", seg.get("original_ar", seg.get("text", ""))).strip()
-        draft_text = seg.get(f"text_{target_lang}", "").strip()
+        orig_text = (seg.get("original_text") or seg.get("original_ar") or seg.get("text") or "").strip()
+        draft_text = (seg.get(f"text_{target_lang}") or "").strip()
 
         if not orig_text or not draft_text:
             continue
@@ -109,8 +122,8 @@ def audit_and_refine_full_book(
                     "revised_text": revised_text,
                     "reason": reason,
                 })
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Editorial audit failed for segment %d: %s", idx, exc)
 
         if idx % 50 == 0 or idx == total_segs:
             print(f"       Audited {idx}/{total_segs} segments ({len(audit_entries)} revisions applied)...")
@@ -120,7 +133,7 @@ def audit_and_refine_full_book(
 
 
 def write_editorial_audit_report(
-    audit_entries: List[Dict[str, Any]],
+    audit_entries: list[dict[str, Any]],
     book_output_dir: Path,
     base_name: str,
     target_lang: str,
@@ -144,7 +157,7 @@ def write_editorial_audit_report(
         f"# 🔎 Full-Book AI Editorial Audit & Quality Report ({target_lang.upper()})",
         "",
         f"- **Book Title**: `{base_name}`",
-        f"- **Audit Date**: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`",
+        f"- **Audit Date**: `{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC`",
         f"- **Total Paragraph Chunks Audited**: `{total_segments_count}`",
         f"- **Total Editorial Revisions Applied**: `{len(audit_entries)}`",
         "",

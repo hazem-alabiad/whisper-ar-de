@@ -32,3 +32,16 @@ whisper-tools = "whisper_tools.main:main"
 reportMissingImports = false
 reportMissingModuleSource = false
 
+[dependency-groups]
+dev = [
+    "ruff>=0.16.0",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# BLE001 (blind exception) and S110 (try/except/pass) are intentional defensive
+# fallback patterns in this CLI tool — broad catches prevent crashes on optional deps.
+# EXE001 is suppressed because main.py has a shebang for direct invocation.
+ignore = ["BLE001", "S110", "EXE001"]

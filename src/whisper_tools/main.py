@@ -32,16 +32,22 @@ Flags:
     --no-cleanup        Keep temporary intermediate files
 """
 
-import os
 import argparse
-import json
+import logging
+import os
 import re
 import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
+
+try:
+    from whisper_tools.logging_config import setup_logging
+except ImportError:
+    from .logging_config import setup_logging
+
+logger = logging.getLogger(__name__)
 
 # Restrict global CPU threads & memory allocation to protect Mac hardware
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -53,24 +59,23 @@ os.environ["PYTORCH_MPS_LOW_WATERMARK_RATIO"] = "0.0"
 os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
 
 import mlx_whisper
-from deep_translator import GoogleTranslator
 from dotenv import load_dotenv
 
 try:
     from whisper_tools.translation import (
+        ensure_models_downloaded,
         translate_segments,
         unload_local_models,
-        verify_translations_with_report,
         verify_transcription_with_llm,
-        ensure_models_downloaded,
+        verify_translations_with_report,
     )
 except ImportError:
     from .translation import (
+        ensure_models_downloaded,
         translate_segments,
         unload_local_models,
-        verify_translations_with_report,
         verify_transcription_with_llm,
-        ensure_models_downloaded,
+        verify_translations_with_report,
     )
 
 # ─── Language Detection ───────────────────────────────────────────
@@ -319,8 +324,7 @@ def cleanup_temp_files(output_dir: Path, base_name: str) -> None:
 
     # Clean up downloaded raw video/audio files
     for pattern in ["*_video.mp4", "*.mp3", "*_video.m4a", "*_video.webm"]:
-        for f in output_dir.glob(pattern):
-            temp_files.append(f)
+        temp_files.extend(output_dir.glob(pattern))
 
     for temp_file in temp_files:
         if temp_file.exists():
@@ -385,7 +389,7 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
     # Check if FFMPEG supports subtitles filter
     has_subtitles = False
     try:
-        res = subprocess.run(["ffmpeg", "-filters"], capture_output=True, text=True)
+        res = subprocess.run(["ffmpeg", "-filters"], capture_output=True, text=True, check=False)
         has_subtitles = "subtitles" in res.stdout
     except Exception:
         pass
@@ -849,6 +853,11 @@ def release_gpu_lock():
 
 def main():
     load_dotenv()
+
+    # Initialise file logging first — all subsequent code is covered
+    log_file = setup_logging()
+    logger.info("whisper-tools session started — log: %s", log_file)
+
     import atexit
     acquire_gpu_lock()
     atexit.register(release_gpu_lock)
@@ -979,7 +988,7 @@ def main():
     # Define output paths dynamically
     source_srt = output_dir / f"{base_name}_{source_lang}.srt"
     target_srts = {target: output_dir / f"{base_name}_{target}.srt" for target in target_langs}
-    combined_srt = output_dir / f"{base_name}_{source_lang}-" + "-".join(target_langs) + ".srt"
+    combined_srt = output_dir / f"{base_name}_{source_lang}-{'-'.join(target_langs)}.srt"
     compressed_video = output_dir / f"{base_name}_compressed.mp4"
 
     # Step 1: Download (skip if video+audio exist)
@@ -1063,7 +1072,7 @@ def main():
                     break
 
     if all_targets_exist and not needs_retranslate:
-        print(f"\n[3/6] Already translated — loading target SRTs...")
+        print("\n[3/6] Already translated — loading target SRTs...")
         source_segments = read_srt(source_srt) if source_srt.exists() else []
         target_segs_dict = {target: read_srt(path) for target, path in target_srts.items()}
 
@@ -1195,7 +1204,7 @@ def main():
 
 - **Source URL**: {args.url}
 - **Base Name**: `{base_name}`
-- **Processed At**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- **Processed At**: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC
 - **Total Segments**: {srt_lines_count}
 
 ---

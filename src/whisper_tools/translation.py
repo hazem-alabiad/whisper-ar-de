@@ -5,16 +5,19 @@ Model 1 (Primary NMT): Helsinki-NLP/opus-mt (MarianMT on PyTorch MPS GPU)
 Model 2 (Verification LLM): Qwen2.5-1.5B-Instruct-4bit or Qwen2.5-3B-Instruct-4bit via mlx-lm (Apple Silicon Metal GPU)
 """
 
+import json
+import logging
 import os
 import random
 import time
-import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from deep_translator import GoogleTranslator
-from datetime import datetime
 
+from deep_translator import GoogleTranslator
+
+logger = logging.getLogger(__name__)
 
 # Restrict PyTorch CPU threads & memory footprint to prevent overheating / system lockups
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -117,7 +120,7 @@ def load_mlx_model(repo_id: str = _DEFAULT_MLX_MODEL):
         _MLX_MODEL_CACHE[repo_id] = (model, tokenizer)
     return _MLX_MODEL_CACHE[repo_id]
 
-def ensure_models_downloaded(args, source_lang: str = "ar", target_langs: list = None):
+def ensure_models_downloaded(args, source_lang: str = "ar", target_langs: list | None = None):
     """Check and pre-download required MLX, Whisper, and MarianMT models upfront by default."""
     use_local = getattr(args, "local_translate", True)
     if not use_local:
@@ -260,8 +263,8 @@ def double_check_translations_locally(segments: list[dict], target_lang: str = "
     }
 
     for i, seg in enumerate(segments, start=1):
-        orig_ar = seg.get("original_ar", seg.get("text", "")).strip()
-        marian_trans = seg.get(f"text_{target_lang}", seg.get("text", "")).strip()
+        orig_ar = (seg.get("original_ar") or seg.get("text") or "").strip()
+        marian_trans = (seg.get(f"text_{target_lang}") or seg.get("text") or "").strip()
 
         if not orig_ar:
             continue
@@ -432,12 +435,14 @@ def format_time(seconds: float) -> str:
     return f"{hrs:02d}:{mins:02d}:{secs:02d},{ms:03d}"
 
 
-def translate_segments(segments: list, output_dir: Path | None, args, source_lang: str = "ar", target_langs: list[str] = ["de", "en"]) -> list:
+def translate_segments(segments: list, output_dir: Path | None, args, source_lang: str = "ar", target_langs: list[str] | None = None) -> list:
     """Translate each segment's text from source language to target languages.
 
     Supports resume capability, live backup, and resource optimization.
     """
     backend = get_translation_backend(args)
+    if target_langs is None:
+        target_langs = ["de", "en"]
     args._backend = backend
 
     # Store original text before translation
@@ -586,24 +591,26 @@ def translate_segments(segments: list, output_dir: Path | None, args, source_lan
     return segments
 
 
-def verify_translations_with_report(segments: list[dict], output_dir: Path, args, source_lang: str = "ar", target_langs: list[str] = ["de", "en"]) -> dict:
+def verify_translations_with_report(segments: list[dict], output_dir: Path, args, source_lang: str = "ar", target_langs: list[str] | None = None) -> dict:
     """Generate verification report directly from the translations."""
     total = len(segments)
     if total == 0:
         return {}
+    if target_langs is None:
+        target_langs = ["de", "en"]
 
     verified_count = 0
     mismatches = []
 
     # Check if target text exists for all segments
     for idx, seg in enumerate(segments, start=1):
-        orig = seg.get("original_text", seg.get("text", "")).strip()
+        orig = (seg.get("original_text") or seg.get("text") or "").strip()
         has_all_targets = all(seg.get(f"text_{t}", "").strip() for t in target_langs)
         if orig and has_all_targets:
             verified_count += 1
 
     report = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "total_segments": total,
         "mlx_llm_verified": verified_count,
         "mlx_llm_mismatches": 0,
@@ -614,7 +621,7 @@ def verify_translations_with_report(segments: list[dict], output_dir: Path, args
     # Save final report in reports/ directory
     reports_dir = output_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
-    report_path = reports_dir / f"verification_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    report_path = reports_dir / f"verification_report_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
     try:
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)

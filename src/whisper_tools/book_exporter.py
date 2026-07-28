@@ -3,16 +3,18 @@
 Generates publisher-quality PDF and digital EPUB e-books from translated text/markdown.
 """
 
-from pathlib import Path
+import logging
 import re
-from typing import Union
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Try importing PDF rendering engine (reportlab)
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-    from reportlab.lib.units import inch
+    from reportlab.lib.units import inch  # noqa: F401
     from reportlab.pdfgen import canvas
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
     _REPORTLAB_AVAILABLE = True
@@ -21,9 +23,9 @@ except ImportError:
 
 # Try importing EPUB engine (ebooklib & markdown)
 try:
-    import ebooklib
-    from ebooklib import epub
+    import ebooklib  # noqa: F401
     import markdown
+    from ebooklib import epub
     _EPUB_AVAILABLE = True
 except ImportError:
     _EPUB_AVAILABLE = False
@@ -71,7 +73,7 @@ class NumberedCanvas(canvas.Canvas):
 
 def export_to_pdf(
     content: str,
-    output_path: Union[str, Path],
+    output_path: str | Path,
     title: str = "Translated Book",
     author: str = "Whisper-Tools AI",
 ) -> bool:
@@ -212,7 +214,7 @@ def export_to_pdf(
 
 def export_to_epub(
     content: str,
-    output_path: Union[str, Path],
+    output_path: str | Path,
     title: str = "Translated Book",
     author: str = "Whisper-Tools AI",
     language: str = "en",

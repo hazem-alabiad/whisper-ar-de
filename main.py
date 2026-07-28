@@ -562,7 +562,7 @@ def verify_translations_with_report(segments: list, output_dir: Path, args) -> d
 
         current_de = seg.get("text_de", seg.get("text", "")).strip()
 
-        # Pass 2: Local MLX LLM verification
+        # Pass 2 & 3: Robust Local MLX LLM verification & Auto-Correction
         if translate_with_mlx_llm is not None:
             try:
                 mlx_de = translate_with_mlx_llm(original_text, "ar", "de")
@@ -575,11 +575,15 @@ def verify_translations_with_report(segments: list, output_dir: Path, args) -> d
                     report["mismatches"].append({
                         "segment": idx,
                         "original_ar": original_text[:100],
-                        "marian_de": current_de[:100],
-                        "mlx_llm_de": mlx_de[:100],
+                        "initial_de": current_de[:100],
+                        "corrected_de": mlx_de[:100],
                     })
-            except Exception:
-                pass
+                    # Robust auto-correction: update segment with LLM translation if original was low quality
+                    if mlx_de and len(mlx_de.strip()) > 3:
+                        seg["text_de"] = mlx_de.strip()
+                        seg["text"] = mlx_de.strip()
+            except Exception as e:
+                print(f"  [WARNING] Verification step error for segment {idx}: {e}")
 
         # Save live backup to ytemp.json
         try:

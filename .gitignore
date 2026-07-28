@@ -23,5 +23,9 @@ model_cache/
 *.bin
 *.safetensors
 *.pth
+*.onnx
+
+# Local User Books
+books/
 *.pt
 *.npz

@@ -747,10 +747,13 @@ def compress_video(video_path: Path, output_path: Path, target_mb: int,
                 sub_layout = layout_choice if layout_choice in ["1", "2", "3"] else "2"
 
             if sub_layout == "2":
-                # YouTube bottom stack
-                german_style = "FontName=Arial\\,FontSize=24\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=2\\,Shadow=1\\,MarginV=60\\,Alignment=2"
-                english_style = "FontName=Arial\\,FontSize=22\\,PrimaryColour=&H00FFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=2\\,Shadow=1\\,MarginV=38\\,Alignment=2"
-                arabic_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=2\\,Shadow=1\\,MarginV=12\\,Alignment=2"
+                # YouTube bottom stack (3 languages with distinct YouTube caption styling)
+                # German: Top line in stack (White with dark outline)
+                german_style = "FontName=Arial\\,FontSize=24\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BackColour=&H80000000&\\,BorderStyle=4\\,Outline=2\\,Shadow=1\\,MarginV=68\\,Alignment=2"
+                # English: Middle line in stack (Yellow/Cyan highlight)
+                english_style = "FontName=Arial\\,FontSize=22\\,PrimaryColour=&H00FFFF&\\,OutlineColour=&H000000&\\,BackColour=&H80000000&\\,BorderStyle=4\\,Outline=2\\,Shadow=1\\,MarginV=42\\,Alignment=2"
+                # Arabic: Bottom line in stack (Clear White bold)
+                arabic_style = "FontName=Arial\\,FontSize=26\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BackColour=&H80000000&\\,BorderStyle=4\\,Outline=2\\,Shadow=1\\,MarginV=14\\,Alignment=2"
             elif sub_layout == "3":
                 # Arabic only at bottom
                 arabic_style = "FontName=Arial\\,FontSize=28\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,BorderStyle=1\\,Outline=2.5\\,Shadow=1\\,MarginV=20\\,Alignment=2"

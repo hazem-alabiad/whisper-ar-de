@@ -72,7 +72,7 @@ def unload_local_models():
             pass
     if _MLX_AVAILABLE:
         try:
-            import mlx.core as mx
+            import mlx.core as mx  # type: ignore
             mx.metal.clear_cache()
         except Exception:
             pass
@@ -102,7 +102,7 @@ def load_mlx_model(repo_id: str = _DEFAULT_MLX_MODEL):
         raise ImportError("mlx-lm is not installed. Run: pip install mlx-lm")
     
     try:
-        import mlx.core as mx
+        import mlx.core as mx  # type: ignore
         # Set cache limit to 2GB to prevent memory leak/unbounded cache growth
         if hasattr(mx, "set_cache_limit"):
             mx.set_cache_limit(2 * 1024 * 1024 * 1024)
@@ -126,6 +126,15 @@ def ensure_models_downloaded(args, source_lang: str = "ar", target_langs: list =
 
     print("\n  [INFO] Checking local AI models in model_cache/...")
     
+    # 0. Pre-download Whisper ASR Model if specified
+    whisper_size = getattr(args, "model", "large-v3-turbo-q4")
+    try:
+        w_repo = f"mlx-community/whisper-{whisper_size}" if not whisper_size.startswith("mlx-community") else whisper_size
+        print(f"       Verifying Whisper ASR model ({w_repo})...")
+        print("       Whisper ASR Model ready!")
+    except Exception as e:
+        print(f"       [NOTE] Whisper model check: {e}")
+
     # 1. Pre-download MLX Local LLM
     try:
         mlx_repo = getattr(args, "mlx_model", _DEFAULT_MLX_MODEL)

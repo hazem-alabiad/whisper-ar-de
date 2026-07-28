@@ -92,6 +92,7 @@ uv run whisper-tools
 
 ### Interactive Menu Capabilities
 
-1. **🎬 YouTube Video Setup**: Enter video URL, select source/target languages, choose download quality presets, select Whisper ASR model size (`base`, `small`, `medium`, `large`), and select whether to run local MLX or Google Translate models.
-2. **📚 Book Translation Setup**: Automatically scans your `books/` workspace folder, lets you select a book by number or enter a custom path, and prompts for target languages.
+1. **🎬 YouTube Video Setup**: Enter video URL, select source/target languages, choose download quality presets, select Whisper ASR model size (`base`, `small`, `medium`, `large`), and select Local LLM model (`Qwen2.5-3B-8bit` / `Qwen2.5-7B-4bit`).
+2. **📚 Book Translation Setup**: Automatically scans your `books/` workspace folder, lets you select a book by number or enter a custom path, select target languages, and pick Local LLM models.
 3. **📖 Flags & Options Guide**: Display an in-terminal cheat sheet detailing all available CLI parameters.
+4. **📥 Interactive Model Pre-Downloader**: Interactively select your desired Whisper ASR and Local LLM models to pre-download them into `model_cache/` upfront for fast offline execution.

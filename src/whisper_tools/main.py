@@ -657,9 +657,10 @@ def run_interactive_launcher(args):
         print("  [1] Translate a YouTube Video (subtitle burning & compression)")
         print("  [2] Translate a Local Book (.txt, .pdf, .docx, .md)")
         print("  [3] Review CLI Flags, Arguments & Options (Help)")
-        print("  [4] Exit")
+        print("  [4] Interactively Select & Pre-download Models to Disk")
+        print("  [5] Exit")
         
-        choice = input("\n  Enter choice [1-4]: ").strip()
+        choice = input("\n  Enter choice [1-5]: ").strip()
         
         if choice == "1":
             print("\n--- 🎬 YouTube Video Translation Configuration ---")
@@ -700,6 +701,14 @@ def run_interactive_launcher(args):
                 args.local_translate = False
             else:
                 args.local_translate = True
+                print("\n  Select Local Translation LLM Model:")
+                print("    [1] Qwen2.5-3B-Instruct-8bit (Fast 8-bit quantized, ~3.5GB RAM - default)")
+                print("    [2] Qwen2.5-7B-Instruct-4bit (Higher accuracy 4-bit, ~4.5GB RAM)")
+                llm_choice = input("  Enter LLM model choice [1-2] (default: 1): ").strip()
+                if llm_choice == "2":
+                    args.mlx_model = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+                else:
+                    args.mlx_model = "mlx-community/Qwen2.5-3B-Instruct-8bit"
                 
             return args
             
@@ -738,6 +747,14 @@ def run_interactive_launcher(args):
                 args.local_translate = False
             else:
                 args.local_translate = True
+                print("\n  Select Local Translation LLM Model:")
+                print("    [1] Qwen2.5-3B-Instruct-8bit (Fast 8-bit quantized, ~3.5GB RAM - default)")
+                print("    [2] Qwen2.5-7B-Instruct-4bit (Higher accuracy 4-bit, ~4.5GB RAM)")
+                llm_choice = input("  Enter LLM model choice [1-2] (default: 1): ").strip()
+                if llm_choice == "2":
+                    args.mlx_model = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+                else:
+                    args.mlx_model = "mlx-community/Qwen2.5-3B-Instruct-8bit"
                 
             return args
             
@@ -758,8 +775,39 @@ def run_interactive_launcher(args):
             print("  --sub-layout LAYOUT      Subtitle layout: 1=Top/Mid/Bot stack, 2=Bot stack, 3=Orig Bot")
             print("-" * 60)
             input("\n  Press Enter to return to main menu...")
-            
+
         elif choice == "4":
+            print("\n--- 📥 Interactive Model Pre-Downloader ---")
+            print("Select Whisper ASR Model Size:")
+            print("  [1] base (150MB)")
+            print("  [2] small (460MB)")
+            print("  [3] medium (1.5GB)")
+            print("  [4] large-v3-turbo-q4 (1.6GB, default)")
+            w_choice = input("Enter choice [1-4] (default: 4): ").strip()
+            if w_choice == "1":
+                args.model = "base"
+            elif w_choice == "2":
+                args.model = "small"
+            elif w_choice == "3":
+                args.model = "medium"
+            else:
+                args.model = "large-v3-turbo-q4"
+
+            print("\nSelect Local Translation LLM Model:")
+            print("  [1] Qwen2.5-3B-Instruct-8bit (default)")
+            print("  [2] Qwen2.5-7B-Instruct-4bit")
+            l_choice = input("Enter choice [1-2] (default: 1): ").strip()
+            if l_choice == "2":
+                args.mlx_model = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+            else:
+                args.mlx_model = "mlx-community/Qwen2.5-3B-Instruct-8bit"
+
+            print("\n  Starting pre-download of selected models...")
+            target_langs_list = [l.strip() for l in getattr(args, "target_lang", "de,en").split(",") if l.strip()]
+            ensure_models_downloaded(args, source_lang=getattr(args, "source_lang", "ar"), target_langs=target_langs_list)
+            input("\n  Pre-download complete! Press Enter to return to main menu...")
+            
+        elif choice == "5":
             print("\nExiting. Goodbye!")
             sys.exit(0)
 
@@ -800,7 +848,7 @@ def main():
     atexit.register(release_gpu_lock)
 
     try:
-        import mlx.core as mx
+        import mlx.core as mx  # type: ignore
         if hasattr(mx, "set_cache_limit"):
             mx.set_cache_limit(2 * 1024 * 1024 * 1024)
         elif hasattr(mx, "metal") and hasattr(mx.metal, "set_cache_limit"):

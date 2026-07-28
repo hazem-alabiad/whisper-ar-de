@@ -23,3 +23,8 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 whisper-tools = "whisper_tools.main:main"
+
+[tool.pyright]
+reportMissingImports = false
+reportMissingModuleSource = false
+

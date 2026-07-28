@@ -105,8 +105,12 @@ def translate_batch_local(texts: list[str], source: str, target: str) -> list[st
 
 # ─── Model 2: Local MLX LLM (Qwen2.5 / Apple Silicon Metal GPU) ────────
 
-def translate_with_mlx_llm(text: str, source: str, target: str, model_id: str = _DEFAULT_MLX_MODEL) -> str:
-    """Translate text using Model 2 (Native MLX quantized LLM on Apple Silicon Metal GPU)."""
+def translate_with_mlx_llm(text: str, source: str, target: str, model_id: str = _DEFAULT_MLX_MODEL, multi_pass: bool = True) -> str:
+    """Translate text using Multi-Pass Agentic Self-Refinement with Qwen2.5-14B on Apple Silicon GPU.
+    
+    Pass 1: Direct neural draft translation.
+    Pass 2: Self-critique & proofreading for grammar, flow, and cultural accuracy.
+    """
     if not text or not text.strip():
         return ""
 
@@ -116,23 +120,49 @@ def translate_with_mlx_llm(text: str, source: str, target: str, model_id: str = 
 
     model, tokenizer = load_mlx_model(model_id)
 
-    prompt = (
-        f"You are a professional subtitle translator. "
-        f"Translate the following {src_name} text accurately into fluent, natural {tgt_name}.\n"
-        f"Do NOT summarize, explain, or add commentary. Output ONLY the final {tgt_name} translation:\n\n"
+    # --- Pass 1: Initial Draft Translation ---
+    draft_prompt = (
+        f"You are an expert literary and subtitle translator proficient in {src_name} and {tgt_name}.\n"
+        f"Translate the following {src_name} text into natural, fluent {tgt_name}.\n"
+        f"Do NOT summarize, explain, or add commentary. Output ONLY the {tgt_name} draft translation:\n\n"
         f"Source ({src_name}): {text}\n"
-        f"Translation ({tgt_name}):"
+        f"Draft Translation ({tgt_name}):"
     )
 
     if hasattr(tokenizer, "apply_chat_template"):
-        messages = [{"role": "user", "content": prompt}]
-        formatted_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        messages_1 = [{"role": "user", "content": draft_prompt}]
+        formatted_prompt_1 = tokenizer.apply_chat_template(messages_1, tokenize=False, add_generation_prompt=True)
     else:
-        formatted_prompt = prompt
+        formatted_prompt_1 = draft_prompt
 
-    response = mlx_generate(model, tokenizer, prompt=formatted_prompt, max_tokens=256, verbose=False)
-    cleaned = response.strip().strip('"').strip("'")
-    return cleaned
+    draft_response = mlx_generate(model, tokenizer, prompt=formatted_prompt_1, max_tokens=256, verbose=False)
+    draft_cleaned = draft_response.strip().strip('"').strip("'")
+
+    if not multi_pass or not draft_cleaned:
+        return draft_cleaned
+
+    # --- Pass 2: Self-Critique & Refinement Pass ---
+    refine_prompt = (
+        f"You are a master editor. Review and refine the following draft translation from {src_name} to {tgt_name}.\n"
+        f"Original {src_name}: {text}\n"
+        f"Draft {tgt_name}: {draft_cleaned}\n\n"
+        f"Fix any awkward phrasing, grammatical mistakes, or unnatural literal word choices.\n"
+        f"Provide the final, publication-grade {tgt_name} translation. Output ONLY the final refined translation:"
+    )
+
+    if hasattr(tokenizer, "apply_chat_template"):
+        messages_2 = [
+            {"role": "user", "content": draft_prompt},
+            {"role": "assistant", "content": draft_cleaned},
+            {"role": "user", "content": refine_prompt},
+        ]
+        formatted_prompt_2 = tokenizer.apply_chat_template(messages_2, tokenize=False, add_generation_prompt=True)
+    else:
+        formatted_prompt_2 = refine_prompt
+
+    refined_response = mlx_generate(model, tokenizer, prompt=formatted_prompt_2, max_tokens=256, verbose=False)
+    final_cleaned = refined_response.strip().strip('"').strip("'")
+    return final_cleaned if final_cleaned else draft_cleaned
 
 def double_check_translations_locally(segments: list[dict], target_lang: str = "de") -> dict:
     """Double check subtitle translations using two local models (MarianMT + MLX LLM)."""

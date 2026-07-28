@@ -106,6 +106,21 @@ def sanitize_filename(name: str) -> str:
     return name if name else "video"
 
 
+def _prompt_validated(prompt: str, *, error_msg: str, validator) -> str:
+    """Keep re-asking *prompt* until *validator(answer)* returns True."""
+    while True:
+        answer = input(prompt).strip()
+        if validator(answer):
+            return answer
+        print(f"  ⚠️  {error_msg}")
+
+
+def _is_youtube_url(url: str) -> bool:
+    """Return True if *url* looks like a YouTube or youtu.be link."""
+    import re as _re
+    return bool(_re.search(r"(youtube\.com/watch|youtu\.be/|youtube\.com/shorts/)", url))
+
+
 def get_youtube_title(url: str) -> str:
     result = subprocess.run(
         ["yt-dlp", "--print", "title", url],
@@ -669,13 +684,19 @@ def run_interactive_launcher(args):
         print("  [4] Interactively Select & Pre-download Models to Disk")
         print("  [5] Exit")
         
-        choice = input("\n  Enter choice [1-5]: ").strip()
+        choice = _prompt_validated(
+            "\n  Enter choice [1-5]: ",
+            error_msg="Please enter a number between 1 and 5.",
+            validator=lambda v: v in ("1", "2", "3", "4", "5"),
+        )
         
         if choice == "1":
             print("\n--- 🎬 YouTube Video Translation Configuration ---")
-            url = input("  Enter YouTube URL: ").strip()
-            while not url:
-                url = input("  URL cannot be empty. Enter YouTube URL: ").strip()
+            url = _prompt_validated(
+                "  Enter YouTube URL: ",
+                error_msg="Please enter a valid YouTube URL (e.g. https://youtube.com/watch?v=...)",
+                validator=_is_youtube_url,
+            )
             args.url = url
             
             src = input(f"  Enter source language code (default: {getattr(args, 'source_lang', 'ar')}): ").strip().lower()
@@ -705,7 +726,11 @@ def run_interactive_launcher(args):
             else:
                 args.model = "large-v3-turbo-q4"
                 
-            local_ans = input("\n  Use local translation models? (y/n, default: y): ").strip().lower()
+            local_ans = _prompt_validated(
+                "\n  Use local translation models? (y/n, default: y): ",
+                error_msg="Please enter 'y' or 'n'.",
+                validator=lambda v: v in ("", "y", "n"),
+            )
             if local_ans == "n":
                 args.local_translate = False
             else:
@@ -735,7 +760,16 @@ def run_interactive_launcher(args):
                 print("\n  Available books found in 'books/':")
                 for idx, b in enumerate(books):
                     print(f"    [{idx+1}] {b.name}")
-                book_sel = input(f"\n  Select a book number [1-{len(books)}] or enter a custom path: ").strip()
+                book_sel = _prompt_validated(
+                    f"\n  Select a book number [1-{len(books)}] or enter a custom path: ",
+                    error_msg=f"Enter a number between 1 and {len(books)}, or a file path.",
+                    validator=lambda v: (
+                        # Accept a valid list number ...
+                        (v.isdigit() and 1 <= int(v) <= len(books))
+                        # ... or a non-empty path/string that isn't an out-of-range digit
+                        or (bool(v) and not (v.isdigit() and not (1 <= int(v) <= len(books))))
+                    ),
+                )
                 if book_sel.isdigit() and 1 <= int(book_sel) <= len(books):
                     args.book = str(books[int(book_sel) - 1])
                 else:
@@ -746,7 +780,11 @@ def run_interactive_launcher(args):
                     book_path = input("  Path cannot be empty. Enter path: ").strip()
                 args.book = book_path
 
-            local_ans = input("\n  Use local translation models? (y/n, default: y): ").strip().lower()
+            local_ans = _prompt_validated(
+                "\n  Use local translation models? (y/n, default: y): ",
+                error_msg="Please enter 'y' or 'n'.",
+                validator=lambda v: v in ("", "y", "n"),
+            )
             if local_ans == "n":
                 args.local_translate = False
             else:

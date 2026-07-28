@@ -640,9 +640,117 @@ def parse_args():
 
 # ─── Main Pipeline ────────────────────────────────────────────────
 
+def run_interactive_launcher(args):
+    """Enter an interactive CLI configuration and mode selector menu when run without arguments."""
+    import sys
+    print("\n" + "=" * 60)
+    print("      🎬📖 Welcome to the Whisper-Tools Pipeline Launcher")
+    print("=" * 60)
+    
+    while True:
+        print("\nPlease select an action:")
+        print("  [1] Translate a YouTube Video (subtitle burning & compression)")
+        print("  [2] Translate a Local Book (.txt, .pdf, .docx, .md)")
+        print("  [3] Review CLI Flags, Arguments & Options (Help)")
+        print("  [4] Exit")
+        
+        choice = input("\n  Enter choice [1-4]: ").strip()
+        
+        if choice == "1":
+            print("\n--- 🎬 YouTube Video Translation Configuration ---")
+            url = input("  Enter YouTube URL: ").strip()
+            while not url:
+                url = input("  URL cannot be empty. Enter YouTube URL: ").strip()
+            args.url = url
+            
+            src = input(f"  Enter source language code (default: {getattr(args, 'source_lang', 'ar')}): ").strip().lower()
+            if src:
+                args.source_lang = src
+                
+            targets = input(f"  Enter comma-separated target language codes (default: {getattr(args, 'target_lang', 'de,en')}): ").strip().lower()
+            if targets:
+                args.target_lang = targets
+                
+            quality = input("  Set video download quality preset [1=low, 2=medium, 3=high, 4=best] (default: ask upfront): ").strip()
+            if quality in ("1", "2", "3", "4", "low", "medium", "high", "best"):
+                args.quality = quality
+                
+            local_ans = input("  Use local translation models? (y/n, default: y): ").strip().lower()
+            if local_ans == "n":
+                args.local_translate = False
+            else:
+                args.local_translate = True
+                
+            return args
+            
+        elif choice == "2":
+            print("\n--- 📚 Book Translation Configuration ---")
+            books_dir = Path("books")
+            books_dir.mkdir(exist_ok=True)
+            
+            # List available books in books/
+            books = sorted([f for f in books_dir.iterdir() if f.is_file() and f.suffix.lower() in (".txt", ".pdf", ".docx", ".md")])
+            if books:
+                print("\n  Available books found in 'books/':")
+                for idx, b in enumerate(books):
+                    print(f"    [{idx+1}] {b.name}")
+                book_sel = input(f"\n  Select a book number [1-{len(books)}] or enter a custom path: ").strip()
+                if book_sel.isdigit() and 1 <= int(book_sel) <= len(books):
+                    args.book = str(books[int(book_sel) - 1])
+                else:
+                    args.book = book_sel
+            else:
+                book_path = input("  Enter path to book file (.txt, .pdf, .docx, .md): ").strip()
+                while not book_path:
+                    book_path = input("  Path cannot be empty. Enter path: ").strip()
+                args.book = book_path
+                
+            src = input(f"  Enter source language code (default: {getattr(args, 'source_lang', 'ar')}): ").strip().lower()
+            if src:
+                args.source_lang = src
+                
+            targets = input(f"  Enter comma-separated target language codes (default: {getattr(args, 'target_lang', 'de,en')}): ").strip().lower()
+            if targets:
+                args.target_lang = targets
+
+            local_ans = input("  Use local translation models? (y/n, default: y): ").strip().lower()
+            if local_ans == "n":
+                args.local_translate = False
+            else:
+                args.local_translate = True
+                
+            return args
+            
+        elif choice == "3":
+            print("\n" + "-" * 60)
+            print("                📖 CLI FLAGS & OPTIONS GUIDE")
+            print("-" * 60)
+            print("Usage: uv run whisper-tools [OPTIONS] [youtube_url]")
+            print("\nCore Options:")
+            print("  --source-lang LANG       Source language code (default: ar)")
+            print("  --target-lang LANGS      Comma-separated targets (default: de,en)")
+            print("  --book PATH              Path to local book file for translation")
+            print("  --no-local-translate     Disable local MLX models and use Google Translate")
+            print("  --target-size SIZE       Target output video size in MB (default: 50)")
+            print("  --quality PRESET         Set download quality preset: 1=low, 2=med, 3=high, 4=best")
+            print("  --double-check           Double check transcription segment by segment")
+            print("  --no-cleanup             Keep intermediate raw video/audio files")
+            print("  --sub-layout LAYOUT      Subtitle layout: 1=Top/Mid/Bot stack, 2=Bot stack, 3=Orig Bot")
+            print("-" * 60)
+            input("\n  Press Enter to return to main menu...")
+            
+        elif choice == "4":
+            print("\nExiting. Goodbye!")
+            sys.exit(0)
+
+
 def main():
     load_dotenv()
     args = parse_args()
+
+    # If neither url nor book is provided, run interactive terminal launcher
+    if not args.url and not args.book:
+        args = run_interactive_launcher(args)
 
     # Check for Book Translation Mode (--book argument or positional file path)
     books_dir = Path("books")

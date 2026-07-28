@@ -86,29 +86,83 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     book_output_dir = output_dir / "books" / base_name
     book_output_dir.mkdir(parents=True, exist_ok=True)
     
-    source_lang = getattr(args, "source_lang", "ar").lower()
-    target_langs_str = getattr(args, "target_lang", "de,en").lower()
-
-    # Determine target languages
-    if getattr(args, "url", None) is not None or getattr(args, "target_lang", None) is not None or getattr(args, "source_lang", None) is not None:
+    # Determine Source & Target Languages dynamically
+    if getattr(args, "source_lang_explicit", False) or getattr(args, "target_lang_explicit", False):
+        source_lang = getattr(args, "source_lang", "ar").lower()
+        target_langs_str = getattr(args, "target_lang", "de,en").lower()
         target_langs = [l.strip() for l in target_langs_str.split(",") if l.strip()]
     else:
-        # Prompt target selection
-        print("\n  Select Target Translation Language(s):")
-        print("    [1] German (Deutsch)")
-        print("    [2] English")
-        print("    [3] Both German & English (Dual Translation)")
-        print("    [4] Custom languages (comma-separated, e.g. de,en,fr)")
-        lang_choice = input("\n  Enter choice [1-4] (default: 3 Both): ").strip()
-        if lang_choice == "1":
-            target_langs = ["de"]
-        elif lang_choice == "2":
-            target_langs = ["en"]
-        elif lang_choice == "4":
-            custom_in = input("  Enter comma-separated target language codes (e.g. de,en,es): ").strip().lower()
-            target_langs = [l.strip() for l in custom_in.split(",") if l.strip()] if custom_in else ["de", "en"]
+        # Prompt Source Language
+        print("\n  Select Book Source Language:")
+        print("    [1] Arabic (ar - default)")
+        print("    [2] German (de)")
+        print("    [3] English (en)")
+        print("    [4] Custom source language code (e.g. fr, es, tr)")
+        src_choice = input("  Enter choice [1-4] (default: 1 Arabic): ").strip()
+        if src_choice == "2":
+            source_lang = "de"
+        elif src_choice == "3":
+            source_lang = "en"
+        elif src_choice == "4":
+            custom_src = input("  Enter custom source language code (e.g. fr, es): ").strip().lower()
+            source_lang = custom_src if custom_src else "ar"
         else:
-            target_langs = ["de", "en"]
+            source_lang = "ar"
+            
+        args.source_lang = source_lang
+
+        # Prompt Target Languages based on Source
+        print(f"\n  Select Target Translation Language(s) (Source: {source_lang.upper()}):")
+        if source_lang == "ar":
+            print("    [1] German (de)")
+            print("    [2] English (en)")
+            print("    [3] Both German & English (de,en - default)")
+            print("    [4] Custom target language codes (comma-separated, e.g. de,en,fr)")
+            lang_choice = input("  Enter choice [1-4] (default: 3 Both): ").strip()
+            if lang_choice == "1":
+                target_langs = ["de"]
+            elif lang_choice == "2":
+                target_langs = ["en"]
+            elif lang_choice == "4":
+                custom_in = input("  Enter comma-separated target language codes: ").strip().lower()
+                target_langs = [l.strip() for l in custom_in.split(",") if l.strip()] if custom_in else ["de", "en"]
+            else:
+                target_langs = ["de", "en"]
+        elif source_lang == "de":
+            print("    [1] Arabic (ar - default)")
+            print("    [2] English (en)")
+            print("    [3] Both Arabic & English (ar,en)")
+            print("    [4] Custom target language codes (comma-separated, e.g. ar,en,fr)")
+            lang_choice = input("  Enter choice [1-4] (default: 1 Arabic): ").strip()
+            if lang_choice == "2":
+                target_langs = ["en"]
+            elif lang_choice == "3":
+                target_langs = ["ar", "en"]
+            elif lang_choice == "4":
+                custom_in = input("  Enter comma-separated target language codes: ").strip().lower()
+                target_langs = [l.strip() for l in custom_in.split(",") if l.strip()] if custom_in else ["ar"]
+            else:
+                target_langs = ["ar"]
+        elif source_lang == "en":
+            print("    [1] Arabic (ar - default)")
+            print("    [2] German (de)")
+            print("    [3] Both Arabic & German (ar,de)")
+            print("    [4] Custom target language codes (comma-separated, e.g. ar,de,fr)")
+            lang_choice = input("  Enter choice [1-4] (default: 1 Arabic): ").strip()
+            if lang_choice == "2":
+                target_langs = ["de"]
+            elif lang_choice == "3":
+                target_langs = ["ar", "de"]
+            elif lang_choice == "4":
+                custom_in = input("  Enter comma-separated target language codes: ").strip().lower()
+                target_langs = [l.strip() for l in custom_in.split(",") if l.strip()] if custom_in else ["ar"]
+            else:
+                target_langs = ["ar"]
+        else:
+            custom_in = input(f"  Enter comma-separated target language codes for {source_lang.upper()} source (default: en): ").strip().lower()
+            target_langs = [l.strip() for l in custom_in.split(",") if l.strip()] if custom_in else ["en"]
+
+        args.target_lang = ",".join(target_langs)
             
     print(f"\n{'='*60}")
     print("  🚀 STARTING BOOK TRANSLATION PIPELINE")

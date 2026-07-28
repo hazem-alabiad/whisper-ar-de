@@ -201,43 +201,36 @@ def select_video_quality(url: str, min_quality: bool = False) -> str:
         return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
 
 
-def download_youtube(url: str, output_dir: Path, min_quality: bool = False, video_format: str | None = None) -> dict:
+def download_youtube(url: str, output_dir: Path, base_name: str, min_quality: bool = False, video_format: str | None = None) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not video_format:
         video_format = select_video_quality(url, min_quality)
 
-    video_template = output_dir / "%(id)s_video.%(ext)s"
+    video_path = output_dir / f"{base_name}_video.mp4"
+    audio_path = output_dir / f"{base_name}.mp3"
+
     subprocess.run(
-        ["yt-dlp", "-f", video_format, "-o", str(video_template), url],
+        ["yt-dlp", "-f", video_format, "-o", str(video_path), url],
         check=True, capture_output=True, text=True,
     )
 
-    # Try to extract audio as MP3; if conversion fails (e.g., missing ffmpeg), fall back to raw m4a download
-    audio_path = None
-    audio_template_mp3 = output_dir / "%(id)s.%(ext)s"
     try:
         subprocess.run(
-            ["yt-dlp", "-x", "--audio-format", "mp3", "-o", str(audio_template_mp3), url],
+            ["yt-dlp", "-x", "--audio-format", "mp3", "-o", str(audio_path), url],
             check=True, capture_output=True, text=True,
         )
-        audio_path = audio_template_mp3
     except subprocess.CalledProcessError:
         print("[WARNING] MP3 audio extraction failed, falling back to m4a audio download.")
-        audio_template_m4a = output_dir / "%(id)s_audio.m4a"
+        audio_path = output_dir / f"{base_name}_audio.m4a"
         subprocess.run(
-            ["yt-dlp", "-f", "bestaudio[ext=m4a]/bestaudio", "-o", str(audio_template_m4a), url],
+            ["yt-dlp", "-f", "bestaudio[ext=m4a]/bestaudio", "-o", str(audio_path), url],
             check=True, capture_output=True, text=True,
         )
-        audio_path = audio_template_m4a
 
-    mp4_files = sorted(output_dir.glob("*_video.mp4"))
-    if not mp4_files:
-        raise RuntimeError("Failed to download video.")
-    video_id = mp4_files[0].stem.replace("_video", "")
     return {
-        "video_id": video_id,
-        "video": mp4_files[0],
+        "video_id": base_name,
+        "video": video_path,
         "audio": audio_path,
     }
 
@@ -1060,7 +1053,7 @@ def main():
         print(f"       Audio: {audio_path.name}")
     else:
         print("\n[1/6] Downloading video & audio...")
-        media = download_youtube(args.url, output_dir, min_quality=args.min_quality, video_format=getattr(args, "quality", None))
+        media = download_youtube(args.url, output_dir, base_name, min_quality=args.min_quality, video_format=getattr(args, "quality", None))
         video_path = media["video"]
         audio_path = media["audio"]
         print(f"       Video: {video_path.name}")

@@ -278,7 +278,7 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
     
     # Save each target language txt/docx
     # Import e-book exporters
-    from whisper_tools.book_exporter import export_to_epub, export_to_pdf
+    from whisper_tools.book_exporter import enrich_markdown_arabic, export_to_epub, export_to_pdf
 
     # Save each target language txt/docx/pdf/epub
     generated_files = []
@@ -330,6 +330,7 @@ def translate_book_interactive(book_path: Path, output_dir: Path, translate_segm
             md_lines.append(f"**{target.upper()}**: {trans}\n")
         md_lines.append("---\n")
     dual_md_content = "\n".join(md_lines)
+    dual_md_content = enrich_markdown_arabic(dual_md_content)
     dual_md_path.write_text(dual_md_content, encoding="utf-8")
     print(f"       Multi-Lingual Book (.md): {dual_md_path.name}")
     generated_files.append(f"Multi-Lingual Book (.md): [`{dual_md_path.name}`](file://{dual_md_path.absolute()})")
